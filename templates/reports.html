@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Security Intelligence Reports - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-file-shield" style="color: var(--accent-cyan);"></i> Security Intelligence & Audit Reports{% endblock %}
+
+{% block content %}
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">Select Report Period:</span>
+            <button class="btn btn-secondary btn-sm" onclick="changePeriod('today')">Today</button>
+            <button class="btn btn-primary btn-sm" id="btn-7d" onclick="changePeriod('7d')">Last 7 Days</button>
+            <button class="btn btn-secondary btn-sm" onclick="changePeriod('30d')">Last 30 Days</button>
+        </div>
+        <div>
+            <a href="/api/reports/export" class="btn btn-success btn-sm">
+                <i class="fas fa-file-csv"></i> Export Full Dataset to CSV
+            </a>
+            <button class="btn btn-secondary btn-sm" onclick="window.print()">
+                <i class="fas fa-print"></i> Print Report
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Report Summary Cards -->
+<div class="stats-grid">
+    <div class="stat-box border-cyan">
+        <div class="stat-label">Total Evaluated Traffic</div>
+        <div class="stat-value" id="rep-total">--</div>
+        <div class="stat-sub">Flows inspected</div>
+    </div>
+    <div class="stat-box border-critical">
+        <div class="stat-label">Total Attack Incidents</div>
+        <div class="stat-value" id="rep-attacks" style="color: var(--sev-critical);">--</div>
+        <div class="stat-sub">Malicious sessions flagged</div>
+    </div>
+    <div class="stat-box border-critical">
+        <div class="stat-label">Critical Tier Threats</div>
+        <div class="stat-value" id="rep-critical">--</div>
+        <div class="stat-sub">Severe infrastructure risks</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Attacks by Category Table -->
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-chart-column"></i> Attack Vectors Summary</div>
+        </div>
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Attack Category</th>
+                    <th>Incident Count</th>
+                    <th>Proportion</th>
+                </tr>
+            </thead>
+            <tbody id="rep-attacks-table">
+                <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">Loading summary...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Top Source Attackers Table -->
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-crosshairs" style="color: var(--sev-critical);"></i> Top 5 Malicious Source IPs</div>
+        </div>
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Source IP</th>
+                    <th>Attack Count</th>
+                    <th>Dominant Attack</th>
+                    <th>Max Severity</th>
+                </tr>
+            </thead>
+            <tbody id="rep-top-ips-table">
+                <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading top attackers...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentPeriod = '7d';
+
+async function loadReportSummary() {
+    try {
+        const res = await fetch(`/api/reports/summary?timeframe=${currentPeriod}`);
+        const data = await res.json();
+
+        document.getElementById('rep-total').innerText = data.total_detections;
+        document.getElementById('rep-attacks').innerText = data.total_attacks;
+        document.getElementById('rep-critical').innerText = data.critical_attacks;
+
+        // Render Attack Types Breakdown
+        const attacksTbody = document.getElementById('rep-attacks-table');
+        const attackKeys = Object.keys(data.attacks_by_type);
+        if (attackKeys.length === 0) {
+            attacksTbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">No attacks recorded in timeframe.</td></tr>';
+        } else {
+            attacksTbody.innerHTML = attackKeys.map(k => {
+                const count = data.attacks_by_type[k];
+                const pct = data.total_detections ? ((count / data.total_detections) * 100).toFixed(1) : 0;
+                return `
+                    <tr>
+                        <td><strong>${k}</strong></td>
+                        <td>${count}</td>
+                        <td><div style="background: #1e293b; border-radius: 4px; overflow: hidden; width: 100px; height: 8px; display: inline-block; vertical-align: middle; margin-right: 8px;"><div style="background: var(--accent-cyan); width: ${pct}%; height: 100%;"></div></div> ${pct}%</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Render Top IPs
+        const ipsTbody = document.getElementById('rep-top-ips-table');
+        if (!data.top_source_ips || data.top_source_ips.length === 0) {
+            ipsTbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No malicious IPs flagged.</td></tr>';
+        } else {
+            ipsTbody.innerHTML = data.top_source_ips.map(ip => `
+                <tr>
+                    <td class="code-font" style="color: var(--accent-cyan);">${ip.ip}</td>
+                    <td><strong>${ip.count}</strong> attacks</td>
+                    <td>${ip.attack}</td>
+                    <td><span class="badge-sev badge-${ip.severity.toLowerCase()}">${ip.severity}</span></td>
+                </tr>
+            `).join('');
+        }
+
+    } catch (e) {
+        console.error("Error loading report summary:", e);
+    }
+}
+
+function changePeriod(p) {
+    currentPeriod = p;
+    loadReportSummary();
+}
+
+loadReportSummary();
+</script>
+{% endblock %}

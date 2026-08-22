@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}User Management - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-users-gear" style="color: var(--accent-cyan);"></i> Identity & Access Management (Admin Only){% endblock %}
+
+{% block content %}
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-user-plus"></i> Provision New Operator / Analyst</div>
+    </div>
+    <form id="create-user-form" onsubmit="handleCreateUser(event)" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; align-items: flex-end;">
+        <div class="form-group" style="margin: 0;">
+            <label class="form-label">Username</label>
+            <input type="text" id="new-username" class="form-control" placeholder="e.g. john_analyst" required>
+        </div>
+        <div class="form-group" style="margin: 0;">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="new-email" class="form-control" placeholder="e.g. john@ids.local" required>
+        </div>
+        <div class="form-group" style="margin: 0;">
+            <label class="form-label">Initial Password</label>
+            <input type="password" id="new-password" class="form-control" placeholder="Min 8 characters" required>
+        </div>
+        <div class="form-group" style="margin: 0;">
+            <label class="form-label">Assigned Role</label>
+            <select id="new-role" class="form-control">
+                <option value="SECURITY_ANALYST">SECURITY_ANALYST</option>
+                <option value="ADMIN">ADMIN</option>
+            </select>
+        </div>
+        <div>
+            <button type="submit" class="btn btn-primary" style="height: 42px;"><i class="fas fa-plus"></i> Create User</button>
+        </div>
+    </form>
+</div>
+
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-users"></i> System Accounts & Role Access</div>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>User ID</th>
+                    <th>Username</th>
+                    <th>Email Address</th>
+                    <th>Assigned Role</th>
+                    <th>Account Status</th>
+                    <th>Must Change Pwd</th>
+                    <th>Last Login</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td style="font-weight: 700; color: var(--text-muted);">#{{ u.id }}</td>
+                    <td><strong>{{ u.username }}</strong></td>
+                    <td style="color: var(--text-secondary);">{{ u.email }}</td>
+                    <td>
+                        <select class="form-control" style="padding: 4px 8px; font-size: 0.8rem; width: auto;" onchange="handleRoleChange({{ u.id }}, this.value)" {% if u.id == current_user.id %}disabled{% endif %}>
+                            <option value="ADMIN" {% if u.role == 'ADMIN' %}selected{% endif %}>ADMIN</option>
+                            <option value="SECURITY_ANALYST" {% if u.role == 'SECURITY_ANALYST' %}selected{% endif %}>SECURITY_ANALYST</option>
+                        </select>
+                    </td>
+                    <td>
+                        <span class="badge-sev {% if u.is_active %}badge-low{% else %}badge-critical{% endif %}">
+                            {{ 'ACTIVE' if u.is_active else 'DISABLED' }}
+                        </span>
+                    </td>
+                    <td>
+                        <span style="font-size: 0.8rem; color: {% if u.must_change_password %}var(--sev-medium){% else %}var(--text-muted){% endif %};">
+                            {{ 'YES' if u.must_change_password else 'NO' }}
+                        </span>
+                    </td>
+                    <td style="font-size: 0.8rem; color: var(--text-muted);">{{ u.last_login.replace('T', ' ').split('.')[0] if u.last_login else 'Never' }}</td>
+                    <td>
+                        {% if u.id != current_user.id %}
+                        <button class="btn btn-sm {% if u.is_active %}btn-warning{% else %}btn-success{% endif %}" onclick="handleToggleActive({{ u.id }})">
+                            <i class="fas fa-power-off"></i> {{ 'Deactivate' if u.is_active else 'Activate' }}
+                        </button>
+                        {% else %}
+                        <span style="font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700;">(Current User)</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function handleCreateUser(e) {
+    e.preventDefault();
+    const username = document.getElementById('new-username').value.trim();
+    const email = document.getElementById('new-email').value.trim();
+    const password = document.getElementById('new-password').value;
+    const role = document.getElementById('new-role').value;
+
+    try {
+        const res = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email, password, role })
+        });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message);
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to create user');
+        }
+    } catch (err) {
+        console.error("Error creating user:", err);
+    }
+}
+
+async function handleToggleActive(userId) {
+    if (!confirm('Are you sure you want to change this user active status?')) return;
+    try {
+        const res = await fetch(`/api/users/${userId}/toggle`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Operation failed');
+        }
+    } catch (e) {
+        console.error("Error toggling user:", e);
+    }
+}
+
+async function handleRoleChange(userId, newRole) {
+    try {
+        const res = await fetch(`/api/users/${userId}/role`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: newRole })
+        });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message);
+        } else {
+            alert(data.error || 'Failed to update role');
+            window.location.reload();
+        }
+    } catch (e) {
+        console.error("Error updating role:", e);
+    }
+}
+</script>
+{% endblock %}

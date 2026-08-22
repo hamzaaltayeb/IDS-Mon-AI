@@ -1,114 +1,116 @@
+import os
+import sys
 import pandas as pd
 import numpy as np
-import os
 import joblib
-from sklearn.model_selection import train_test_split
-from feature_extractor import FeatureExtractor
-from preprocessing import Preprocessor
+
+# Add src to sys.path to allow imports from anywhere
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from preprocessing import Preprocessor, UNSW_NUMERIC_FEATURES
 from anomaly_model import AnomalyDetector
 from classifier_model import AttackClassifier
 
-def generate_synthetic_data(samples=2000):
+# Mapping UNSW-NB15 attack categories to the project's target threat taxonomy
+ATTACK_MAPPING = {
+    'Normal': 'Normal',
+    'DoS': 'DDoS',
+    'Reconnaissance': 'Port Scan',
+    'Exploits': 'Brute Force',
+    'Backdoor': 'Brute Force',
+    'Generic': 'Brute Force'
+}
+
+def load_and_prepare_dataset(file_path):
     """
-    Generates a synthetic network traffic dataset for training.
-    In a real project, this would be replaced by a real PCAP or CSV dataset.
+    Loads real UNSW-NB15 dataset and maps attack categories to the target project scope:
+    [Normal, DDoS, Port Scan, Brute Force].
     """
-    print("Generating synthetic network traffic dataset...")
+    print(f"Loading real benchmark dataset from: {file_path}...")
+    df = pd.read_csv(file_path)
     
-    # Random Normal Traffic
-    normal = pd.DataFrame({
-        'proto': np.random.choice([6, 17], samples), # TCP/UDP
-        'dst_port': np.random.choice([80, 443, 53, 22], samples),
-        'total_size': np.random.randint(100, 10000, samples),
-        'avg_size': np.random.randint(50, 500, samples),
-        'std_size': np.random.randint(0, 100, samples),
-        'pkt_count': np.random.randint(1, 50, samples),
-        'duration': np.random.uniform(0.1, 10.0, samples),
-        'avg_inter_arrival': np.random.uniform(0.01, 0.5, samples),
-        'max_inter_arrival': np.random.uniform(0.1, 1.0, samples),
-        'label': 'Normal'
-    })
-
-    # DDoS Attack (High packet count, low duration, high bytes/sec)
-    ddos = pd.DataFrame({
-        'proto': np.random.choice([6], samples // 4),
-        'dst_port': 80,
-        'total_size': np.random.randint(50000, 200000, samples // 4),
-        'avg_size': np.random.randint(1000, 2000, samples // 4),
-        'std_size': np.random.randint(100, 500, samples // 4),
-        'pkt_count': np.random.randint(500, 2000, samples // 4),
-        'duration': np.random.uniform(0.1, 1.0, samples // 4),
-        'avg_inter_arrival': np.random.uniform(0.001, 0.01, samples // 4),
-        'max_inter_arrival': np.random.uniform(0.01, 0.05, samples // 4),
-        'label': 'DDoS'
-    })
-
-    # Port Scan (Many different ports, low packet count per flow)
-    scan = pd.DataFrame({
-        'proto': 6,
-        'dst_port': np.random.randint(1, 65535, samples // 4),
-        'total_size': np.random.randint(40, 200, samples // 4),
-        'avg_size': np.random.randint(40, 60, samples // 4),
-        'std_size': 0,
-        'pkt_count': np.random.randint(1, 10, samples // 4),
-        'duration': np.random.uniform(0.01, 0.1, samples // 4),
-        'avg_inter_arrival': np.random.uniform(0.001, 0.05, samples // 4),
-        'max_inter_arrival': np.random.uniform(0.01, 0.1, samples // 4),
-        'label': 'Port Scan'
-    })
-
-    # Brute Force (Specific port like 22, medium packet count, regular intervals)
-    brute = pd.DataFrame({
-        'proto': 6,
-        'dst_port': 22,
-        'total_size': np.random.randint(1000, 5000, samples // 4),
-        'avg_size': np.random.randint(100, 300, samples // 4),
-        'std_size': np.random.randint(10, 50, samples // 4),
-        'pkt_count': np.random.randint(50, 150, samples // 4),
-        'duration': np.random.uniform(5.0, 30.0, samples // 4),
-        'avg_inter_arrival': np.random.uniform(0.1, 0.5, samples // 4),
-        'max_inter_arrival': np.random.uniform(0.5, 2.0, samples // 4),
-        'label': 'Brute Force'
-    })
-
-    df = pd.concat([normal, ddos, scan, brute], ignore_index=True)
+    # Map to target project classes (Normal, DDoS, Port Scan, Brute Force)
+    df['attack_label'] = df['attack_cat'].map(ATTACK_MAPPING).fillna('Unknown')
     
-    # Calculate engineered features manually for synthetic data
-    df['packets_per_second'] = df['pkt_count'] / (df['duration'] + 1e-6)
-    df['bytes_per_second'] = df['total_size'] / (df['duration'] + 1e-6)
-    
-    return df
+    # Filter for the target attack classes
+    filtered_df = df[df['attack_label'] != 'Unknown'].copy().reset_index(drop=True)
+    print(f"Dataset loaded: {len(filtered_df)} records across classes:")
+    print(filtered_df['attack_label'].value_counts().to_string())
+    return filtered_df
+
+def save_models_and_preprocessor(preprocessor, anomaly_detector, attack_classifier):
+    """
+    Saves trained models and preprocessor to both root models/ and src/models/.
+    """
+    dest_dirs = [
+        os.path.join(BASE_DIR, "models"),
+        os.path.join(SRC_DIR, "models")
+    ]
+    for d in dest_dirs:
+        os.makedirs(d, exist_ok=True)
+        joblib.dump(preprocessor, os.path.join(d, "preprocessor.joblib"))
+        anomaly_detector.save_model(os.path.join(d, "anomaly_model.joblib"))
+        attack_classifier.save_model(os.path.join(d, "classifier_model.joblib"))
+    print("All models and preprocessors saved successfully to models/ and src/models/.")
 
 def main():
-    # 1. Get Data
-    df = generate_synthetic_data()
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-    df.to_csv("data/synthetic_dataset.csv", index=False)
+    train_path = os.path.join(SRC_DIR, "data", "UNSW_NB15_training-set.csv")
+    test_path = os.path.join(SRC_DIR, "data", "UNSW_NB15_testing-set.csv")
     
-    # 2. Preprocess
-    preprocessor = Preprocessor()
-    X = preprocessor.preprocess(df, fit=True)
-    y = preprocessor.encode_labels(df['label'], fit=True)
+    if not os.path.exists(train_path):
+        print(f"Error: Real dataset file not found at {train_path}")
+        sys.exit(1)
+        
+    print("=========================================================")
+    print("🚀 Training AI Models on Real UNSW-NB15 Benchmark Dataset")
+    print("=========================================================")
     
-    # Save preprocessor for real-time use
-    joblib.dump(preprocessor, "models/preprocessor.joblib")
+    # 1. Load Real Data
+    train_df = load_and_prepare_dataset(train_path)
+    test_df = load_and_prepare_dataset(test_path) if os.path.exists(test_path) else None
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # 2. Feature Selection & Preprocessing
+    available_features = [f for f in UNSW_NUMERIC_FEATURES if f in train_df.columns]
+    preprocessor = Preprocessor(features=available_features)
     
-    # 3. Train Anomaly Detector (train only on 'Normal' or all data as contamination)
-    # Usually IF is trained on all data with a contamination factor
-    anomaly_detector = AnomalyDetector(contamination=0.25) # Approx 25% are attacks
+    X_train = preprocessor.preprocess(train_df, fit=True)
+    y_train = preprocessor.encode_labels(train_df['attack_label'], fit=True)
+    
+    if test_df is not None:
+        X_test = preprocessor.preprocess(test_df, fit=False)
+        y_test = preprocessor.encode_labels(test_df['attack_label'], fit=False)
+    else:
+        from sklearn.model_selection import train_test_split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+        )
+    
+    # 3. Train Isolation Forest (Unsupervised Anomaly Detection)
+    attack_ratio = float((train_df['attack_label'] != 'Normal').mean())
+    contamination = min(0.5, max(0.01, round(attack_ratio, 2)))
+    print(f"\nTraining Isolation Forest (Contamination: {contamination:.2f})...")
+    anomaly_detector = AnomalyDetector(contamination=contamination)
     anomaly_detector.train(X_train)
-    anomaly_detector.save_model("models/anomaly_model.joblib")
     
-    # 4. Train Attack Classifier
-    attack_classifier = AttackClassifier()
+    # 4. Train Random Forest (Supervised Attack Classifier)
+    print("\nTraining Random Forest Multi-Class Classifier...")
+    attack_classifier = AttackClassifier(n_estimators=100)
     attack_classifier.train(X_train, y_train)
-    attack_classifier.evaluate(X_test, y_test)
-    attack_classifier.save_model("models/classifier_model.joblib")
     
-    print("\nTraining Phase Completed!")
+    # 5. Evaluate on Real Testing Set
+    print("\n=========================================================")
+    print("📊 Evaluation Results on Real Benchmark Testing Set:")
+    print("=========================================================")
+    attack_classifier.evaluate(X_test, y_test)
+    
+    # 6. Save Model Artifacts
+    save_models_and_preprocessor(preprocessor, anomaly_detector, attack_classifier)
+    print("\n✅ Real Benchmark Model Training Pipeline Completed Successfully!")
 
 if __name__ == "__main__":
     main()
+
+

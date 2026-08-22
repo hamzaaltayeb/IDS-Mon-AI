@@ -1,5 +1,8 @@
+import os
 import pandas as pd
 import numpy as np
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class FeatureExtractor:
     """
@@ -15,15 +18,17 @@ class FeatureExtractor:
         if df.empty:
             return pd.DataFrame()
 
-        # Group by Source IP, Destination IP, Protocol, and Destination Port (NetFlow style)
-        # We also need to define a 'flow' based on time if we want to be more realistic, 
-        # but for this project, grouping by these keys is a good start.
+        working_df = df.copy()
         
-        # Calculate duration
-        df['time_diff'] = df.groupby(['src_ip', 'dst_ip', 'proto', 'dst_port'])['time'].diff().fillna(0)
+        # Sort packets chronologically by time if time column exists
+        if 'time' in working_df.columns:
+            working_df = working_df.sort_values(by='time')
+
+        # Calculate time diff between consecutive packets in the same flow
+        working_df['time_diff'] = working_df.groupby(['src_ip', 'dst_ip', 'proto', 'dst_port'])['time'].diff().fillna(0)
         
         # Aggregate features
-        flow_features = df.groupby(['src_ip', 'dst_ip', 'proto', 'dst_port']).agg({
+        flow_features = working_df.groupby(['src_ip', 'dst_ip', 'proto', 'dst_port']).agg({
             'size': ['sum', 'mean', 'std', 'count'],
             'time_diff': ['sum', 'mean', 'max']
         }).reset_index()
@@ -46,12 +51,16 @@ class FeatureExtractor:
 
 if __name__ == "__main__":
     # Example usage
+    raw_traffic_file = os.path.join(BASE_DIR, "data", "raw_traffic.csv")
+    out_features_file = os.path.join(BASE_DIR, "data", "flow_features.csv")
     try:
-        raw_df = pd.read_csv("data/raw_traffic.csv")
+        raw_df = pd.read_csv(raw_traffic_file)
         extractor = FeatureExtractor()
         features = extractor.extract_features(raw_df)
         print(features.head())
-        features.to_csv("data/flow_features.csv", index=False)
-        print("Flow features saved to data/flow_features.csv")
+        os.makedirs(os.path.dirname(out_features_file), exist_ok=True)
+        features.to_csv(out_features_file, index=False)
+        print(f"Flow features saved to {out_features_file}")
     except FileNotFoundError:
-        print("Please run data_collector.py first to generate raw_traffic.csv")
+        print(f"Please run data_collector.py first to generate {raw_traffic_file}")
+

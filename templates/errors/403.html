@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}403 Forbidden - Access Denied{% endblock %}
+{% block content %}
+<div style="text-align: center; padding: 80px 20px;">
+    <div style="font-size: 5rem; color: var(--sev-critical); margin-bottom: 20px;"><i class="fas fa-shield-alt"></i> 403</div>
+    <h2 style="font-size: 1.8rem; margin-bottom: 15px;">Access Forbidden</h2>
+    <p style="color: var(--text-secondary); max-width: 500px; margin: 0 auto 30px auto;">
+        {{ message or "You do not have the required role privileges to access this security resource." }}
+    </p>
+    <a href="/dashboard" class="btn btn-primary"><i class="fas fa-home"></i> Return to Dashboard</a>
+</div>
+{% endblock %}

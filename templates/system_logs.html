@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}System Audit Logs - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-list-check" style="color: var(--accent-cyan);"></i> Security & System Audit Trail (Admin Only){% endblock %}
+
+{% block content %}
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div style="display: flex; gap: 15px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 250px;">
+            <input type="text" id="log-search" class="form-control" placeholder="Search audit actions or descriptions..." onkeyup="if(event.key === 'Enter') loadLogs()">
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn btn-primary btn-sm" onclick="loadLogs()"><i class="fas fa-magnifying-glass"></i> Search Logs</button>
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('log-search').value=''; loadLogs();"><i class="fas fa-rotate"></i> Reset</button>
+        </div>
+    </div>
+</div>
+
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-shield"></i> Immutable Audit Events</div>
+        <span style="font-size: 0.75rem; color: var(--text-muted);" id="logs-count">--</span>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Log ID</th>
+                    <th>Timestamp</th>
+                    <th>Actor / User</th>
+                    <th>Role</th>
+                    <th>Action Code</th>
+                    <th>Event Description</th>
+                    <th>Source IP</th>
+                </tr>
+            </thead>
+            <tbody id="logs-table-body">
+                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading audit logs...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function loadLogs() {
+    const search = document.getElementById('log-search').value.trim();
+    try {
+        const res = await fetch(`/api/logs?search=${encodeURIComponent(search)}&limit=100`);
+        const data = await res.json();
+        document.getElementById('logs-count').innerText = `${data.length} audit records retrieved`;
+
+        const tbody = document.getElementById('logs-table-body');
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">No audit events match your search.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.map(l => {
+            const timeStr = l.created_at.replace('T', ' ').split('.')[0];
+            return `
+                <tr>
+                    <td style="font-weight: 700; color: var(--text-muted);">#${l.id}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${timeStr}</td>
+                    <td><strong>${l.username}</strong></td>
+                    <td><span class="badge-sev ${l.role === 'ADMIN' ? 'badge-critical' : 'badge-cyan'}">${l.role}</span></td>
+                    <td class="code-font" style="color: var(--accent-cyan); font-size: 0.82rem;">${l.action}</td>
+                    <td>${l.description}</td>
+                    <td class="code-font" style="font-size: 0.8rem; color: var(--text-secondary);">${l.ip_address}</td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error("Error loading logs:", e);
+    }
+}
+
+loadLogs();
+</script>
+{% endblock %}

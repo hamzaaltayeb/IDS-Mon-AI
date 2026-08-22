@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Network Flow Monitoring - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-network-wired" style="color: var(--accent-cyan);"></i> Network Flow Monitoring & Telemetry Stream{% endblock %}
+
+{% block content %}
+<!-- Top Action Bar: Mode Navigation & Reset Control -->
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
+    <div style="display: flex; gap: 10px;">
+        <button id="tab-btn-live" class="btn btn-primary" onclick="switchTab('live')">
+            <i class="fas fa-satellite-dish"></i> LIVE NETWORK MONITORING (REAL TRAFFIC)
+        </button>
+        <button id="tab-btn-sim" class="btn btn-secondary" onclick="switchTab('sim')">
+            <i class="fas fa-flask"></i> SIMULATION MODE (UNSW-NB15 BENCHMARK)
+        </button>
+    </div>
+    <div>
+        <button class="btn btn-outline-danger" onclick="resetMonitoringData()" title="Purge all network flows, detections, and alerts to reset telemetry">
+            <i class="fas fa-trash-arrow-up"></i> Reset Stream & Purge Data
+        </button>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- TAB 1: LIVE NETWORK MONITORING MODE (REAL PACKET CAPTURE) -->
+<!-- ======================================================== -->
+<div id="tab-panel-live" class="soc-card" style="margin-bottom: 25px; border-top: 4px solid var(--accent-cyan);">
+    <div class="soc-card-header">
+        <div class="soc-card-title">
+            <i class="fas fa-tower-broadcast" style="color: var(--accent-cyan);"></i> Real-Time Packet Sniffing & Flow Collector
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <span id="live-status-badge" class="badge-sev badge-medium">STOPPED / IDLE</span>
+            <button id="btn-start-live" class="btn btn-success btn-sm" onclick="startLiveCapture()">
+                <i class="fas fa-play"></i> Start Live Capture
+            </button>
+            <button id="btn-stop-live" class="btn btn-danger btn-sm" onclick="stopLiveCapture()">
+                <i class="fas fa-stop"></i> Stop Live Capture
+            </button>
+        </div>
+    </div>
+
+    <!-- Live Parameters Form -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; background: #0f1623; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+        <div>
+            <label class="form-label"><i class="fas fa-ethernet"></i> Network Interface</label>
+            <select id="live-interface-select" class="form-control" onchange="onInterfaceChange()">
+                <option value="wlp108s0">wlp108s0 (Wi-Fi) - 10.105.186.71</option>
+                <option value="lo">lo (Loopback) - 127.0.0.1</option>
+            </select>
+        </div>
+        <div>
+            <label class="form-label"><i class="fas fa-filter"></i> BPF Capture Filter</label>
+            <input type="text" id="live-filter-input" class="form-control" value="ip" placeholder="e.g. ip, tcp, udp, not port 22">
+        </div>
+        <div>
+            <label class="form-label"><i class="fas fa-stopwatch"></i> Flow Inactivity Timeout</label>
+            <input type="number" id="live-timeout-input" class="form-control" value="10" min="2" max="60" step="1">
+        </div>
+        <div style="display: flex; align-items: flex-end; padding-bottom: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-secondary); font-size: 0.85rem;">
+                <input type="checkbox" id="live-debug-checkbox" style="width: 16px; height: 16px; accent-color: var(--accent-cyan);">
+                <span><i class="fas fa-bug"></i> Packet Header Trace</span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Loopback Warning Notice Alert Box -->
+    <div id="live-loopback-warning" class="flash-msg flash-warning" style="display: none; margin-bottom: 15px;">
+        <i class="fas fa-triangle-exclamation"></i> <strong>Loopback Warning:</strong> You are currently monitoring local loopback traffic (<code>127.0.0.1</code>). For real external LAN or Wi-Fi traffic, select your physical interface (e.g. <code>wlp108s0</code>).
+    </div>
+
+    <!-- Permission / Driver Error Notice Alert Box -->
+    <div id="live-error-box" class="flash-msg flash-error" style="display: none; margin-bottom: 15px;"></div>
+
+    <!-- Live Telemetry KPI Cards -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--accent-cyan);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Packets Captured</div>
+            <div id="live-packets-count" style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary); margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--sev-medium);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Active Flows in Memory</div>
+            <div id="live-active-flows" style="font-size: 1.4rem; font-weight: 800; color: var(--sev-medium); margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--accent-blue);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Finalized Flows</div>
+            <div id="live-finalized-flows" style="font-size: 1.4rem; font-weight: 800; color: var(--accent-blue); margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--sev-low);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Analyzed Flows (Saved)</div>
+            <div id="live-analyzed-flows" style="font-size: 1.4rem; font-weight: 800; color: var(--sev-low); margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--sev-critical);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Threat Detections</div>
+            <div id="live-detections-count" style="font-size: 1.4rem; font-weight: 800; color: var(--sev-critical); margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid #e040fb;">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Security Alerts</div>
+            <div id="live-alerts-count" style="font-size: 1.4rem; font-weight: 800; color: #e040fb; margin-top: 4px;">0</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--text-muted);">
+            <div style="font-size: 0.70rem; color: var(--text-secondary); text-transform: uppercase;">Uptime</div>
+            <div id="live-uptime" style="font-size: 1.4rem; font-weight: 800; color: var(--text-secondary); margin-top: 4px;">0s</div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- TAB 2: SIMULATION MODE (UNSW-NB15 BENCHMARK SAMPLES)     -->
+<!-- ======================================================== -->
+<div id="tab-panel-sim" class="soc-card" style="margin-bottom: 25px; display: none; border-top: 4px solid var(--sev-medium);">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-flask"></i> Benchmark Flow Stream Simulator</div>
+        <div style="display: flex; gap: 10px;">
+            <button id="btn-stream-toggle" class="btn btn-success btn-sm" onclick="toggleAutoStream()">
+                <i class="fas fa-play"></i> Start Auto Stream
+            </button>
+            <button id="btn-simulate" class="btn btn-primary btn-sm" onclick="simulateLiveFlows(5)">
+                <i class="fas fa-bolt"></i> Ingest 5 Benchmark Flows
+            </button>
+        </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">Stream Status</div>
+            <div id="stream-status-text" style="font-weight: 700; color: var(--sev-low); margin-top: 4px;">IDLE / READY</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">Features Extracted per Flow</div>
+            <div style="font-weight: 700; color: var(--accent-cyan); margin-top: 4px;">11 Standard Flow Metrics</div>
+        </div>
+        <div style="background: #141d2f; padding: 12px 16px; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary);">Benchmark Dataset Source</div>
+            <div style="font-weight: 700; color: var(--sev-medium); margin-top: 4px;">UNSW-NB15 Benchmark</div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================================== -->
+<!-- SHARED: ANALYZED 11-FEATURE NETWORK FLOWS TABLE          -->
+<!-- ======================================================== -->
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-list"></i> Recorded Network Flows (11-Feature Sessions)</div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+            <select id="filter-source-select" class="form-control" style="width: auto; padding: 4px 10px; font-size: 0.8rem;" onchange="loadFlows()">
+                <option value="ALL">All Sources</option>
+                <option value="live" selected>Live Captures Only</option>
+                <option value="simulation">Simulation Only</option>
+            </select>
+            <span style="font-size: 0.75rem; color: var(--text-muted);" id="flows-count-label">0 flows</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadFlows()"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Flow ID</th>
+                    <th>Source</th>
+                    <th>Source IP</th>
+                    <th>Destination IP</th>
+                    <th>Proto</th>
+                    <th>Port</th>
+                    <th>Duration (s)</th>
+                    <th>Packets</th>
+                    <th>Total Bytes</th>
+                    <th>Packets/s</th>
+                    <th>Bytes/s</th>
+                    <th>Captured At</th>
+                </tr>
+            </thead>
+            <tbody id="flows-table-body">
+                <tr><td colspan="12" style="text-align: center; color: var(--text-muted); padding: 20px;">No network flows recorded yet. Start Live Capture or Ingest Flows above.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let autoStreamInterval = null;
+let activeTab = 'live';
+
+function switchTab(mode) {
+    activeTab = mode;
+    const btnLive = document.getElementById('tab-btn-live');
+    const btnSim = document.getElementById('tab-btn-sim');
+    const panelLive = document.getElementById('tab-panel-live');
+    const panelSim = document.getElementById('tab-panel-sim');
+    const filterSelect = document.getElementById('filter-source-select');
+
+    if (mode === 'live') {
+        btnLive.className = 'btn btn-primary';
+        btnSim.className = 'btn btn-secondary';
+        panelLive.style.display = 'block';
+        panelSim.style.display = 'none';
+        if (filterSelect) filterSelect.value = 'live';
+    } else {
+        btnLive.className = 'btn btn-secondary';
+        btnSim.className = 'btn btn-primary';
+        panelLive.style.display = 'none';
+        panelSim.style.display = 'block';
+        if (filterSelect) filterSelect.value = 'simulation';
+    }
+    loadFlows();
+}
+
+function onInterfaceChange() {
+    const select = document.getElementById('live-interface-select');
+    const warningBox = document.getElementById('live-loopback-warning');
+    if (select && warningBox) {
+        warningBox.style.display = (select.value === 'lo') ? 'block' : 'none';
+    }
+}
+
+async function loadInterfaces() {
+    try {
+        const res = await fetch('/api/monitoring/interfaces');
+        const data = await res.json();
+        const select = document.getElementById('live-interface-select');
+        if (select && data.interfaces) {
+            select.innerHTML = data.interfaces.map(iface => `
+                <option value="${iface.name}" ${iface.name === data.default ? 'selected' : ''}>
+                    ${iface.description}
+                </option>
+            `).join('');
+            onInterfaceChange();
+        }
+    } catch (e) {
+        console.error("Error loading interfaces:", e);
+    }
+}
+
+function toggleAutoStream() {
+    const btn = document.getElementById('btn-stream-toggle');
+    const statusText = document.getElementById('stream-status-text');
+
+    if (autoStreamInterval) {
+        clearInterval(autoStreamInterval);
+        autoStreamInterval = null;
+        btn.innerHTML = '<i class="fas fa-play"></i> Start Auto Stream';
+        btn.className = 'btn btn-success btn-sm';
+        statusText.innerText = 'IDLE / PAUSED';
+        statusText.style.color = 'var(--text-muted)';
+    } else {
+        autoStreamInterval = setInterval(() => simulateLiveFlows(3), 3500);
+        btn.innerHTML = '<i class="fas fa-pause"></i> Pause Auto Stream';
+        btn.className = 'btn btn-danger btn-sm';
+        statusText.innerText = 'STREAMING BENCHMARK FLOWS (3.5s interval)';
+        statusText.style.color = 'var(--sev-low)';
+    }
+}
+
+async function loadFlows() {
+    try {
+        const filterSelect = document.getElementById('filter-source-select');
+        const source = filterSelect ? filterSelect.value : 'ALL';
+        const res = await fetch(`/api/flows?limit=30&source=${source}`);
+        const data = await res.json();
+        const tbody = document.getElementById('flows-table-body');
+        const countLabel = document.getElementById('flows-count-label');
+
+        if (countLabel) countLabel.innerText = `${data.total || 0} flows recorded`;
+
+        if (!data.flows || data.flows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="12" style="text-align: center; color: var(--text-muted); padding: 25px;">No network flows recorded. Start live capture or stream simulation flows.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.flows.map(f => {
+            const isLive = (f.traffic_source === 'live');
+            const sourceBadge = isLive 
+                ? `<span class="badge-sev badge-low" style="font-size:0.65rem; padding:2px 6px;">LIVE</span>` 
+                : `<span class="badge-sev badge-medium" style="font-size:0.65rem; padding:2px 6px;">SIM</span>`;
+
+            return `
+                <tr>
+                    <td style="font-weight: 700; color: var(--text-muted);">#${f.id}</td>
+                    <td>${sourceBadge}</td>
+                    <td class="code-font" style="color: var(--accent-cyan);">${f.source_ip}</td>
+                    <td class="code-font">${f.destination_ip}</td>
+                    <td><span style="font-weight: 600;">${f.protocol}</span></td>
+                    <td><span style="color: var(--accent-blue); font-weight: 700;">${f.destination_port}</span></td>
+                    <td>${f.flow_duration}</td>
+                    <td>${f.packet_count}</td>
+                    <td>${f.total_flow_size.toLocaleString()}</td>
+                    <td>${f.packets_per_second}</td>
+                    <td>${(f.bytes_per_second / 1024).toFixed(1)} KB</td>
+                    <td style="font-size: 0.78rem; color: var(--text-secondary);">${f.captured_at.replace('T', ' ').split('.')[0]}</td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error("Error loading flows:", e);
+    }
+}
+
+// Initial setup & Polling
+loadInterfaces();
+loadFlows();
+pollLiveTelemetry();
+
+setInterval(() => {
+    loadFlows();
+    if (activeTab === 'live') {
+        pollLiveTelemetry();
+    }
+}, 3000);
+</script>
+{% endblock %}

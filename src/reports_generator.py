@@ -2,14 +2,19 @@ import os
 import pandas as pd
 from datetime import datetime
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_LOG_FILE = os.path.join(BASE_DIR, "logs", "alerts.log")
+DEFAULT_REPORT_DIR = os.path.join(BASE_DIR, "reports")
+
 class ReportGenerator:
     """
     Generates security reports from the alerts log file.
     """
-    def __init__(self, log_file="logs/alerts.log", report_dir="reports"):
-        self.log_file = log_file
-        self.report_dir = report_dir
+    def __init__(self, log_file=None, report_dir=None):
+        self.log_file = log_file or DEFAULT_LOG_FILE
+        self.report_dir = report_dir or DEFAULT_REPORT_DIR
         os.makedirs(self.report_dir, exist_ok=True)
+
 
     def parse_logs(self):
         """

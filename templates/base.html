@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SOC Operations Center - AI-NSMS{% endblock %}</title>
+    <!-- FontAwesome & Chart.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/soc_theme.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <i class="fas fa-shield-halved" style="color: var(--accent-cyan);"></i>
+                    <span>AI</span>-NSMS
+                </div>
+            </div>
+
+            <ul class="sidebar-menu">
+                <li class="menu-category">Threat Monitoring</li>
+                <li>
+                    <a href="/dashboard" class="sidebar-link {% if request.path == '/' or request.path == '/dashboard' %}active{% endif %}">
+                        <i class="fas fa-chart-pie"></i>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/monitoring" class="sidebar-link {% if request.path == '/monitoring' %}active{% endif %}">
+                        <i class="fas fa-network-wired"></i>
+                        <span>Network Flows</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/detections" class="sidebar-link {% if request.path.startswith('/detections') %}active{% endif %}">
+                        <i class="fas fa-radar"></i>
+                        <span>Detection Events</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/alerts" class="sidebar-link {% if request.path == '/alerts' %}active{% endif %}">
+                        <i class="fas fa-bell"></i>
+                        <span>Security Alerts</span>
+                        {% if active_alerts_count > 0 %}
+                        <span class="badge-count">{{ active_alerts_count }}</span>
+                        {% endif %}
+                    </a>
+                </li>
+                <li>
+                    <a href="/reports" class="sidebar-link {% if request.path == '/reports' %}active{% endif %}">
+                        <i class="fas fa-file-shield"></i>
+                        <span>Audit Reports</span>
+                    </a>
+                </li>
+
+                {% if is_admin %}
+                <li class="menu-category">Administration</li>
+                <li>
+                    <a href="/users" class="sidebar-link {% if request.path == '/users' %}active{% endif %}">
+                        <i class="fas fa-users-gear"></i>
+                        <span>User Management</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/logs" class="sidebar-link {% if request.path == '/logs' %}active{% endif %}">
+                        <i class="fas fa-list-check"></i>
+                        <span>System Audit Logs</span>
+                    </a>
+                </li>
+                {% endif %}
+
+                <li class="menu-category">Preferences</li>
+                <li>
+                    <a href="/profile" class="sidebar-link {% if request.path == '/profile' %}active{% endif %}">
+                        <i class="fas fa-user-shield"></i>
+                        <span>My Profile</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/logout" class="sidebar-link" style="color: var(--sev-critical);">
+                        <i class="fas fa-right-from-bracket"></i>
+                        <span>Sign Out</span>
+                    </a>
+                </li>
+            </ul>
+
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <span class="user-name">{{ current_user.username if current_user else 'Guest' }}</span>
+                    <span class="user-role-badge">
+                        <i class="fas fa-id-badge"></i> {{ current_user.role if current_user else 'ANALYST' }}
+                    </span>
+                </div>
+                <a href="/profile" style="color: var(--text-secondary);"><i class="fas fa-gear"></i></a>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="main-wrapper">
+            <header class="topbar">
+                <div class="page-title">
+                    {% block page_header %}
+                    <i class="fas fa-shield-virus" style="color: var(--accent-cyan);"></i> SOC Command & Monitoring Center
+                    {% endblock %}
+                </div>
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <div class="live-indicator">
+                        <span class="pulse-dot"></span> AI ENGINE ACTIVE
+                    </div>
+                    <span style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono);" id="live-clock"></span>
+                </div>
+            </header>
+
+            <main class="content-body">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                  {% if messages %}
+                    {% for category, message in messages %}
+                      <div class="flash-msg flash-{{ category }}">
+                        <i class="fas fa-circle-info"></i> {{ message }}
+                      </div>
+                    {% endfor %}
+                  {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/soc_app.js') }}"></script>
+    <script>
+        function updateClock() {
+            const clockEl = document.getElementById('live-clock');
+            if (clockEl) {
+                const now = new Date();
+                clockEl.innerText = now.toUTCString().replace('GMT', 'UTC');
+            }
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

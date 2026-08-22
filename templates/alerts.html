@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Security Alerts - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-bell" style="color: var(--sev-critical);"></i> Security Incident Alerts{% endblock %}
+
+{% block content %}
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+        <div style="display: flex; gap: 15px; flex-wrap: wrap; flex: 1;">
+            <div style="min-width: 180px;">
+                <label class="form-label">Alert Status</label>
+                <select id="filter-status" class="form-control" onchange="loadAlerts()">
+                    <option value="ALL">All Statuses</option>
+                    <option value="NEW" selected>NEW (Unacknowledged)</option>
+                    <option value="ACKNOWLEDGED">ACKNOWLEDGED</option>
+                    <option value="RESOLVED">RESOLVED</option>
+                </select>
+            </div>
+            <div style="min-width: 180px;">
+                <label class="form-label">Severity Level</label>
+                <select id="filter-severity" class="form-control" onchange="loadAlerts()">
+                    <option value="ALL">All Severities</option>
+                    <option value="CRITICAL">Critical</option>
+                    <option value="HIGH">High</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="LOW">Low</option>
+                </select>
+            </div>
+        </div>
+        <div style="display: flex; gap: 10px; padding-top: 22px;">
+            <button class="btn btn-secondary btn-sm" onclick="loadAlerts()"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+    </div>
+</div>
+
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-triangle-exclamation"></i> Security Incident Queue</div>
+        <span style="font-size: 0.75rem; color: var(--text-muted);" id="alert-summary-label">--</span>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Alert ID</th>
+                    <th>Created At</th>
+                    <th>Source & Target</th>
+                    <th>Incident Title</th>
+                    <th>Attack Type</th>
+                    <th>Threat Score</th>
+                    <th>Severity</th>
+                    <th>Status</th>
+                    <th>Investigation & Actions</th>
+                </tr>
+            </thead>
+            <tbody id="alerts-table-body">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading alerts...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function loadAlerts() {
+    const status = document.getElementById('filter-status').value;
+    const sev = document.getElementById('filter-severity').value;
+    
+    try {
+        const res = await fetch(`/api/alerts?status=${status}&severity=${sev}&limit=100`);
+        const data = await res.json();
+        document.getElementById('alert-summary-label').innerText = `${data.active_count} New alerts pending response`;
+
+        const tbody = document.getElementById('alerts-table-body');
+        if (!data.alerts || data.alerts.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 25px;">No security alerts found matching selected criteria.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.alerts.map(a => {
+            const sevClass = `badge-${a.severity.toLowerCase()}`;
+            const timeStr = a.created_at.replace('T', ' ').split('.')[0];
+            return `
+                <tr>
+                    <td style="font-weight: 700; color: var(--text-muted);">#${a.id}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${timeStr}</td>
+                    <td class="code-font" style="font-size: 0.8rem;">
+                        <span style="color: var(--accent-cyan);">${a.source_ip}</span> &rarr; <span>${a.destination_ip}</span>
+                    </td>
+                    <td><strong>${a.title}</strong></td>
+                    <td>${a.attack_type}</td>
+                    <td><span style="font-weight: 700;">${a.threat_score}</span>/100</td>
+                    <td><span class="badge-sev ${sevClass}">${a.severity}</span></td>
+                    <td>
+                        <span style="font-size: 0.75rem; font-weight: 700; color: ${a.status === 'NEW' ? 'var(--sev-critical)' : (a.status === 'ACKNOWLEDGED' ? 'var(--sev-medium)' : 'var(--sev-low)')};">
+                            ${a.status}
+                        </span>
+                    </td>
+                    <td>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <a href="/detections/${a.detection_id}" class="btn btn-secondary btn-sm" title="View Forensics"><i class="fas fa-eye"></i></a>
+                            ${a.status === 'NEW' ? `
+                                <button class="btn btn-warning btn-sm" onclick="updateAlertStatus(${a.id}, 'ACKNOWLEDGED')"><i class="fas fa-check"></i> Acknowledge</button>
+                            ` : ''}
+                            ${a.status !== 'RESOLVED' ? `
+                                <button class="btn btn-success btn-sm" onclick="updateAlertStatus(${a.id}, 'RESOLVED')"><i class="fas fa-check-double"></i> Resolve</button>
+                            ` : '<span style="color: var(--text-muted); font-size: 0.75rem;"><i class="fas fa-circle-check"></i> Closed</span>'}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error("Error loading alerts:", e);
+    }
+}
+
+loadAlerts();
+</script>
+{% endblock %}

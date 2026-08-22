@@ -58,11 +58,17 @@ class DataCollector:
         
         return pd.DataFrame(data)
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 if __name__ == "__main__":
     # Test with a dummy path or if a pcap exists
-    collector = DataCollector("data/sample.pcap")
+    sample_pcap = os.path.join(BASE_DIR, "data", "sample.pcap")
+    out_raw_file = os.path.join(BASE_DIR, "data", "raw_traffic.csv")
+    collector = DataCollector(sample_pcap)
     df = collector.extract_packet_data(collector.read_pcap())
     if not df.empty:
         print(df.head())
-        df.to_csv("data/raw_traffic.csv", index=False)
-        print("Raw traffic data saved to data/raw_traffic.csv")
+        os.makedirs(os.path.dirname(out_raw_file), exist_ok=True)
+        df.to_csv(out_raw_file, index=False)
+        print(f"Raw traffic data saved to {out_raw_file}")
+

@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Detection #{{ detection.id }} Forensics - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-microscope" style="color: var(--accent-cyan);"></i> Forensic Analysis: Detection #{{ detection.id }}{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 20px;">
+    <a href="/detections" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Back to Detections</a>
+</div>
+
+<!-- Header Verdict Card -->
+<div class="soc-card" style="margin-bottom: 25px; border-left: 6px solid var(--sev-{{ detection.severity|lower }});">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+        <div>
+            <div style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase;">AI Classification Verdict</div>
+            <h1 style="font-size: 2rem; font-weight: 800; margin: 6px 0; color: var(--text-primary);">
+                {{ detection.attack_type }}
+                <span class="badge-sev badge-{{ detection.severity|lower }}" style="vertical-align: middle; font-size: 0.9rem;">{{ detection.severity }}</span>
+            </h1>
+            <div style="color: var(--text-muted); font-size: 0.88rem;">
+                Flagged on: <span class="code-font" style="color: var(--text-secondary);">{{ detection.detected_at.replace('T', ' ').split('.')[0] }}</span>
+            </div>
+        </div>
+        <div style="display: flex; gap: 30px; text-align: center;">
+            <div style="background: #141d2f; padding: 15px 25px; border-radius: 10px;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Confidence</div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: var(--accent-cyan);">{{ "%.1f"|format(detection.confidence * 100) }}%</div>
+            </div>
+            <div style="background: #141d2f; padding: 15px 25px; border-radius: 10px;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Threat Score</div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: {% if detection.threat_score >= 80 %}var(--sev-critical){% elif detection.threat_score >= 50 %}var(--sev-high){% else %}var(--sev-low){% endif %};">
+                    {{ detection.threat_score }}<span style="font-size: 0.9rem; color: var(--text-muted);">/100</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Indicators Card -->
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-lightbulb" style="color: var(--sev-medium);"></i> AI Decision Indicators & Reasoning</div>
+    </div>
+    <div class="indicator-box">
+        <p style="font-size: 0.95rem; line-height: 1.6; color: var(--text-primary);">
+            <i class="fas fa-circle-exclamation" style="color: var(--accent-cyan); margin-right: 8px;"></i>
+            {{ detection.indicators or "Standard legitimate traffic pattern identified across all 11 statistical features." }}
+        </p>
+    </div>
+</div>
+
+<!-- 11 Flow Features Breakdown Grid -->
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-table-columns" style="color: var(--accent-cyan);"></i> Extracted 11 Network Flow Features</div>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">Raw feature matrix ingested by AI models</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px;">
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">1. Protocol & Transport</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--accent-cyan); margin-top: 4px;">{{ detection.flow.protocol }} ({{ detection.flow.source_ip }} &rarr; {{ detection.flow.destination_ip }})</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">2. Destination Port</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--sev-high); margin-top: 4px;">Port {{ detection.flow.destination_port }}</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">3. Total Flow Size</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.total_flow_size|int }} Bytes</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">4. Average Packet Size</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.average_packet_size }} Bytes</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">5. Standard Deviation of Packet Size</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.std_packet_size }}</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">6. Total Packet Count</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.packet_count }} packets</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">7. Flow Duration</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.flow_duration }} seconds</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">8. Average Inter-Arrival Time</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.average_inter_arrival_time }} s</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">9. Maximum Inter-Arrival Time</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">{{ detection.flow.maximum_inter_arrival_time }} s</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">10. Packets Per Second (Rate)</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--sev-critical); margin-top: 4px;">{{ detection.flow.packets_per_second }} pkt/s</div>
+        </div>
+
+        <div style="background: #141d2f; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color);">
+            <div style="font-size: 0.75rem; color: var(--text-muted);">11. Bytes Per Second (Throughput)</div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: var(--sev-high); margin-top: 4px;">{{ (detection.flow.bytes_per_second / 1024)|round(1) }} KB/s</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

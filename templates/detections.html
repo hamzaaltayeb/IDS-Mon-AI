@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Threat Detections - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-radar" style="color: var(--accent-cyan);"></i> Threat Detection Results{% endblock %}
+
+{% block content %}
+<div class="soc-card" style="margin-bottom: 25px;">
+    <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+        <div style="flex: 1; min-width: 200px;">
+            <label class="form-label">Filter Attack Type</label>
+            <select id="filter-attack" class="form-control" onchange="loadDetections()">
+                <option value="ALL">All Threat Types</option>
+                <option value="DDOS">DDoS</option>
+                <option value="PORT_SCAN">Port Scan</option>
+                <option value="BRUTE_FORCE">Brute Force</option>
+                <option value="NORMAL">Normal Traffic</option>
+                <option value="UNKNOWN">Unknown Threat</option>
+            </select>
+        </div>
+        <div style="flex: 1; min-width: 200px;">
+            <label class="form-label">Filter Severity Tier</label>
+            <select id="filter-severity" class="form-control" onchange="loadDetections()">
+                <option value="ALL">All Severities</option>
+                <option value="CRITICAL">Critical</option>
+                <option value="HIGH">High</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="LOW">Low</option>
+            </select>
+        </div>
+        <div style="padding-top: 22px;">
+            <button class="btn btn-secondary" onclick="resetFilters()"><i class="fas fa-rotate-left"></i> Reset</button>
+        </div>
+    </div>
+</div>
+
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-fingerprint"></i> AI/ML Decision Matrix Logs</div>
+        <span style="font-size: 0.75rem; color: var(--text-muted);" id="det-count-label">-- total detections</span>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Det ID</th>
+                    <th>Detection Time</th>
+                    <th>Source IP</th>
+                    <th>Target IP:Port</th>
+                    <th>Prediction</th>
+                    <th>Attack Type</th>
+                    <th>Confidence</th>
+                    <th>Threat Score</th>
+                    <th>Severity</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="detections-table-body">
+                <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading detection logs...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function loadDetections() {
+    const attack = document.getElementById('filter-attack').value;
+    const sev = document.getElementById('filter-severity').value;
+    
+    try {
+        const res = await fetch(`/api/detections?attack_type=${attack}&severity=${sev}&limit=50`);
+        const data = await res.json();
+        document.getElementById('det-count-label').innerText = `${data.total} total detections recorded`;
+
+        const tbody = document.getElementById('detections-table-body');
+        if (!data.detections || data.detections.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">No detection events match current filters.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.detections.map(d => {
+            const sevClass = `badge-${d.severity.toLowerCase()}`;
+            const timeStr = d.detected_at.replace('T', ' ').split('.')[0];
+            return `
+                <tr>
+                    <td style="font-weight: 700; color: var(--text-muted);">#${d.id}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${timeStr}</td>
+                    <td class="code-font" style="color: var(--accent-cyan);">${d.source_ip}</td>
+                    <td class="code-font">${d.destination_ip}:${d.destination_port}</td>
+                    <td>
+                        <span style="font-weight: 700; color: ${d.prediction === 'ATTACK' ? 'var(--sev-critical)' : 'var(--sev-low)'};">
+                            ${d.prediction}
+                        </span>
+                    </td>
+                    <td><strong>${d.attack_type}</strong></td>
+                    <td>${(d.confidence * 100).toFixed(1)}%</td>
+                    <td><span style="font-weight: 700;">${d.threat_score}</span>/100</td>
+                    <td><span class="badge-sev ${sevClass}">${d.severity}</span></td>
+                    <td>
+                        <a href="/detections/${d.id}" class="btn btn-secondary btn-sm"><i class="fas fa-magnifying-glass-chart"></i> Forensics</a>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error("Error loading detections:", e);
+    }
+}
+
+function resetFilters() {
+    document.getElementById('filter-attack').value = 'ALL';
+    document.getElementById('filter-severity').value = 'ALL';
+    loadDetections();
+}
+
+loadDetections();
+</script>
+{% endblock %}

@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block title %}SOC Dashboard - AI-NSMS{% endblock %}
+{% block page_header %}<i class="fas fa-chart-pie" style="color: var(--accent-cyan);"></i> Security Operations Dashboard{% endblock %}
+
+{% block content %}
+<!-- Quick Actions & Reset Bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="badge-sev badge-low" style="font-size: 0.75rem;"><span class="pulse-dot" style="display:inline-block; margin-right:4px;"></span> SOC TELEMETRY ACTIVE</span>
+        <span style="font-size: 0.8rem; color: var(--text-secondary);">Real-time multi-model analysis</span>
+    </div>
+    <div style="display: flex; gap: 10px;">
+        <a href="/monitoring" class="btn btn-primary btn-sm"><i class="fas fa-tower-broadcast"></i> Live Monitoring Console</a>
+        <button class="btn btn-outline-danger btn-sm" onclick="resetMonitoringData()" title="Purge telemetry data and zero all metrics">
+            <i class="fas fa-trash-arrow-up"></i> Reset Data & Counters
+        </button>
+    </div>
+</div>
+
+<!-- KPI Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-box border-cyan">
+        <div class="stat-label">Total Network Flows</div>
+        <div class="stat-value" id="kpi-total-flows">--</div>
+        <div class="stat-sub">Analyzed flow sessions</div>
+    </div>
+    <div class="stat-box border-critical">
+        <div class="stat-label">Active Alerts</div>
+        <div class="stat-value" id="kpi-active-alerts" style="color: var(--sev-critical);">--</div>
+        <div class="stat-sub"><span id="kpi-critical-alerts">--</span> Critical alerts</div>
+    </div>
+    <div class="stat-box border-critical">
+        <div class="stat-label">DDoS Attacks</div>
+        <div class="stat-value" id="kpi-ddos">--</div>
+        <div class="stat-sub">Volumetric floods</div>
+    </div>
+    <div class="stat-box border-high">
+        <div class="stat-label">Port Scans</div>
+        <div class="stat-value" id="kpi-port-scan">--</div>
+        <div class="stat-sub">Reconnaissance sweeps</div>
+    </div>
+    <div class="stat-box border-high">
+        <div class="stat-label">Brute Force</div>
+        <div class="stat-value" id="kpi-brute-force">--</div>
+        <div class="stat-sub">Auth credential attacks</div>
+    </div>
+    <div class="stat-box border-low">
+        <div class="stat-label">Normal Traffic</div>
+        <div class="stat-value" id="kpi-normal" style="color: var(--sev-low);">--</div>
+        <div class="stat-sub">Clean baseline sessions</div>
+    </div>
+    <div class="stat-box border-medium">
+        <div class="stat-label">Unknown Anomalies</div>
+        <div class="stat-value" id="kpi-unknown" style="color: var(--sev-medium);">--</div>
+        <div class="stat-sub">Isolation Forest flags</div>
+    </div>
+</div>
+
+<!-- Charts Grid 1: Attacks Over Time & Attack Distribution -->
+<div class="grid-2">
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-chart-line" style="color: var(--accent-cyan);"></i> Threat Activity Timeline</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Real-time stream</span>
+        </div>
+        <div style="height: 260px;">
+            <canvas id="chart-timeline"></canvas>
+        </div>
+    </div>
+
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-chart-pie" style="color: var(--sev-high);"></i> Attack Types Breakdown</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">AI Classification</span>
+        </div>
+        <div style="height: 260px; display: flex; justify-content: center;">
+            <canvas id="chart-attacks"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Grid 2: Severity Distribution & Network Traffic Metrics -->
+<div class="grid-2">
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-layer-group" style="color: var(--sev-critical);"></i> Severity Distribution</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Threat Score Tiers</span>
+        </div>
+        <div style="height: 240px;">
+            <canvas id="chart-severity"></canvas>
+        </div>
+    </div>
+
+    <div class="soc-card">
+        <div class="soc-card-header">
+            <div class="soc-card-title"><i class="fas fa-gauge-high" style="color: var(--accent-blue);"></i> Traffic Flow Rate Metrics</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Packets & Bytes Rates</span>
+        </div>
+        <div style="padding: 15px 0;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                <div style="background: #1e293b; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Average Packet Rate</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: var(--accent-cyan); margin: 6px 0;" id="metric-avg-pps">--</div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">packets / sec</div>
+                </div>
+                <div style="background: #1e293b; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Peak Packet Rate</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: var(--sev-critical); margin: 6px 0;" id="metric-max-pps">--</div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">packets / sec</div>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                <div style="background: #1e293b; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Average Byte Rate</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: var(--sev-low); margin: 6px 0;" id="metric-avg-bps">--</div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">KB / sec</div>
+                </div>
+                <div style="background: #1e293b; padding: 15px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Peak Byte Rate</div>
+                    <div style="font-size: 1.6rem; font-weight: 700; color: var(--sev-high); margin: 6px 0;" id="metric-max-bps">--</div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">KB / sec</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Security Alerts Table -->
+<div class="soc-card">
+    <div class="soc-card-header">
+        <div class="soc-card-title"><i class="fas fa-bell" style="color: var(--sev-critical);"></i> Recent Live Security Alerts</div>
+        <div style="display: flex; gap: 10px;">
+            <button id="btn-simulate" class="btn btn-primary btn-sm" onclick="simulateLiveFlows(5)">
+                <i class="fas fa-bolt"></i> Ingest Live Batch
+            </button>
+            <a href="/alerts" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-right"></i> View All</a>
+        </div>
+    </div>
+    <div class="table-responsive">
+        <table class="soc-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Source IP</th>
+                    <th>Destination IP</th>
+                    <th>Attack Type</th>
+                    <th>Threat Score</th>
+                    <th>Severity</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="dashboard-alerts-body">
+                <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading alerts stream...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let timelineChart, attacksChart, severityChart;
+
+async function loadDashboardData() {
+    try {
+        // 1. Fetch KPI Stats
+        const statsRes = await fetch('/api/dashboard/stats');
+        const stats = await statsRes.json();
+        
+        document.getElementById('kpi-total-flows').innerText = stats.total_flows;
+        document.getElementById('kpi-active-alerts').innerText = stats.active_alerts;
+        document.getElementById('kpi-critical-alerts').innerText = stats.critical_alerts;
+        document.getElementById('kpi-ddos').innerText = stats.attacks.ddos;
+        document.getElementById('kpi-port-scan').innerText = stats.attacks.port_scan;
+        document.getElementById('kpi-brute-force').innerText = stats.attacks.brute_force;
+        document.getElementById('kpi-normal').innerText = stats.attacks.normal;
+        document.getElementById('kpi-unknown').innerText = stats.attacks.unknown;
+
+        // 2. Fetch Charts Data
+        const chartsRes = await fetch('/api/dashboard/charts');
+        const chartsData = await chartsRes.json();
+
+        // Metrics
+        document.getElementById('metric-avg-pps').innerText = chartsData.traffic_averages.avg_pps;
+        document.getElementById('metric-max-pps').innerText = chartsData.traffic_averages.max_pps;
+        document.getElementById('metric-avg-bps').innerText = (chartsData.traffic_averages.avg_bps / 1024).toFixed(1);
+        document.getElementById('metric-max-bps').innerText = (chartsData.traffic_averages.max_bps / 1024).toFixed(1);
+
+        renderCharts(chartsData);
+
+        // 3. Fetch Recent Alerts Table
+        const alertsRes = await fetch('/api/alerts?limit=8');
+        const alertsData = await alertsRes.json();
+        renderAlertsTable(alertsData.alerts);
+
+    } catch (e) {
+        console.error("Error loading dashboard data:", e);
+    }
+}
+
+function renderCharts(data) {
+    // 1. Timeline Chart
+    const ctxTimeline = document.getElementById('chart-timeline').getContext('2d');
+    if (timelineChart) timelineChart.destroy();
+    timelineChart = new Chart(ctxTimeline, {
+        type: 'line',
+        data: {
+            labels: data.timeline.labels.length ? data.timeline.labels : ['Current'],
+            datasets: [
+                { label: 'DDoS', data: data.timeline.ddos, borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', tension: 0.3, fill: true },
+                { label: 'Brute Force', data: data.timeline.brute_force, borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', tension: 0.3, fill: true },
+                { label: 'Port Scan', data: data.timeline.port_scan, borderColor: '#eab308', backgroundColor: 'rgba(234, 179, 8, 0.1)', tension: 0.3, fill: true },
+                { label: 'Normal', data: data.timeline.normal, borderColor: '#10b981', tension: 0.3 }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
+            scales: {
+                x: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } },
+                y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+            }
+        }
+    });
+
+    // 2. Attack Types Doughnut
+    const ctxAttacks = document.getElementById('chart-attacks').getContext('2d');
+    if (attacksChart) attacksChart.destroy();
+    const attackLabels = Object.keys(data.attack_distribution);
+    const attackVals = Object.values(data.attack_distribution);
+    attacksChart = new Chart(ctxAttacks, {
+        type: 'doughnut',
+        data: {
+            labels: attackLabels.length ? attackLabels : ['Normal'],
+            datasets: [{
+                data: attackVals.length ? attackVals : [1],
+                backgroundColor: ['#10b981', '#ef4444', '#f97316', '#eab308', '#06b6d4'],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 11 } } } }
+        }
+    });
+
+    // 3. Severity Bar Chart
+    const ctxSev = document.getElementById('chart-severity').getContext('2d');
+    if (severityChart) severityChart.destroy();
+    const sevMap = data.severity_distribution;
+    severityChart = new Chart(ctxSev, {
+        type: 'bar',
+        data: {
+            labels: ['Low', 'Medium', 'High', 'Critical'],
+            datasets: [{
+                label: 'Detections by Severity',
+                data: [sevMap.LOW || 0, sevMap.MEDIUM || 0, sevMap.HIGH || 0, sevMap.CRITICAL || 0],
+                backgroundColor: ['#10b981', '#eab308', '#f97316', '#ef4444'],
+                borderRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#9ca3af' }, grid: { display: false } },
+                y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+            }
+        }
+    });
+}
+
+function renderAlertsTable(alerts) {
+    const tbody = document.getElementById('dashboard-alerts-body');
+    if (!alerts || alerts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">No alerts currently registered.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = alerts.map(a => {
+        const sevClass = `badge-${a.severity.toLowerCase()}`;
+        const timeStr = a.created_at.replace('T', ' ').split('.')[0];
+        return `
+            <tr>
+                <td style="font-size: 0.8rem; color: var(--text-secondary);">${timeStr}</td>
+                <td class="code-font">${a.source_ip}</td>
+                <td class="code-font">${a.destination_ip}</td>
+                <td><strong>${a.attack_type}</strong></td>
+                <td><span style="font-weight: 700;">${a.threat_score}</span>/100</td>
+                <td><span class="badge-sev ${sevClass}">${a.severity}</span></td>
+                <td>
+                    <span style="font-size: 0.75rem; font-weight: 700; color: ${a.status === 'NEW' ? 'var(--sev-critical)' : (a.status === 'ACKNOWLEDGED' ? 'var(--sev-medium)' : 'var(--sev-low)')};">
+                        ${a.status}
+                    </span>
+                </td>
+                <td>
+                    ${a.status === 'NEW' ? `
+                        <button class="btn btn-warning btn-sm" onclick="updateAlertStatus(${a.id}, 'ACKNOWLEDGED')"><i class="fas fa-check"></i> Ack</button>
+                    ` : (a.status === 'ACKNOWLEDGED' ? `
+                        <button class="btn btn-success btn-sm" onclick="updateAlertStatus(${a.id}, 'RESOLVED')"><i class="fas fa-check-double"></i> Resolve</button>
+                    ` : `<span style="color: var(--text-muted); font-size: 0.78rem;">Resolved</span>`)}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Initial load & 5-second polling
+loadDashboardData();
+setInterval(loadDashboardData, 6000);
+</script>
+{% endblock %}

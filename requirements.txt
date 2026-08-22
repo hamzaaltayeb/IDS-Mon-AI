@@ -2,8 +2,10 @@ scapy
 pandas
 numpy
 scikit-learn
-tensorflow
 flask
 joblib
 matplotlib
 python-dotenv
+SQLAlchemy
+psycopg2-binary
+

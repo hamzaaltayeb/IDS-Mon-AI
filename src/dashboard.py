@@ -1,58 +1,84 @@
-from flask import Flask, render_template, jsonify
 import os
+import sys
+from flask import Flask, render_template, jsonify
 
-app = Flask(__name__, template_folder='../templates')
+# Add src to sys.path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-LOG_FILE = "logs/alerts.log"
+from database.connection import init_db
+from database.models import Alert
+from auth.security import get_current_user, is_admin
 
-def parse_alerts():
-    alerts = []
-    if not os.path.exists(LOG_FILE):
-        return alerts
-        
-    with open(LOG_FILE, "r") as f:
-        lines = f.readlines()
-        # Get last 50 alerts
-        for line in reversed(lines):
-            try:
-                parts = line.strip().split(" | ")
-                if len(parts) >= 3:
-                    timestamp = parts[0].split(",")[0]
-                    data = parts[2].split(" | ")
-                    if len(data) == 4:
-                        alerts.append({
-                            'timestamp': timestamp,
-                            'attack': data[0],
-                            'ip': data[1],
-                            'severity': data[2],
-                            'score': data[3]
-                        })
-                if len(alerts) >= 50:
-                    break
-            except:
-                continue
-    return alerts
+# Import all Route Blueprints
+from routes.auth_routes import auth_bp
+from routes.dashboard_routes import dashboard_bp
+from routes.monitoring_routes import monitoring_bp
+from routes.detection_routes import detection_bp
+from routes.alert_routes import alert_bp
+from routes.report_routes import report_bp
+from routes.user_routes import user_bp
+from routes.log_routes import log_bp
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def create_app():
+    templates_path = os.path.join(os.path.dirname(BASE_DIR), 'templates')
+    static_path = os.path.join(os.path.dirname(BASE_DIR), 'static')
 
-@app.route('/api/alerts')
-def get_alerts():
-    alerts = parse_alerts()
-    return jsonify(alerts)
+    app = Flask(__name__, template_folder=templates_path, static_folder=static_path)
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'ai-nsms-soc-secret-production-key-2026')
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
-@app.route('/api/stats')
-def get_stats():
-    alerts = parse_alerts()
-    stats = {
-        'total': len(alerts),
-        'critical': len([a for a in alerts if a['severity'] == 'Critical']),
-        'high': len([a for a in alerts if a['severity'] == 'High']),
-        'medium': len([a for a in alerts if a['severity'] == 'Medium'])
-    }
-    return jsonify(stats)
+    # Initialize Database
+    with app.app_context():
+        init_db()
+
+    # Register Blueprints
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(dashboard_bp)
+    app.register_blueprint(monitoring_bp)
+    app.register_blueprint(detection_bp)
+    app.register_blueprint(alert_bp)
+    app.register_blueprint(report_bp)
+    app.register_blueprint(user_bp)
+    app.register_blueprint(log_bp)
+
+    # Context Processors for Templates
+    @app.context_processor
+    def inject_global_context():
+        current_user = get_current_user()
+        active_alerts_count = Alert.count(status='NEW') if current_user else 0
+        return {
+            'current_user': current_user,
+            'is_admin': is_admin(),
+            'active_alerts_count': active_alerts_count
+        }
+
+    # Error Handlers
+    @app.errorhandler(403)
+    def forbidden(e):
+        return render_template('errors/403.html', message='Access Forbidden: Insufficient role permissions.'), 403
+
+    @app.errorhandler(404)
+    def not_found(e):
+        return render_template('errors/404.html'), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        return render_template('errors/500.html'), 500
+
+    return app
+
+app = create_app()
 
 if __name__ == '__main__':
-    print("Starting Security Dashboard at http://localhost:5000")
-    app.run(debug=True, port=5000)
+    port = int(os.getenv('PORT', 5000))
+    host = os.getenv('HOST', '0.0.0.0')
+    print("==================================================================")
+    print("🛡️  Intelligent Network Security Monitoring System (AI-NSMS) 🛡️")
+    print(f"🚀 SOC Operations Center running at: http://localhost:{port}")
+    print("👤 Admin Account:    admin   / Admin@12345")
+    print("👤 Analyst Account:  analyst / Analyst@12345")
+    print("==================================================================")
+    app.run(debug=True, host=host, port=port)

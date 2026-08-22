@@ -1,12 +1,15 @@
+import os
+import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
-import joblib
-import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, "src", "models", "classifier_model.joblib")
 
 class AttackClassifier:
     """
     Module for supervised multi-class classification of network attacks.
-    Classifies traffic into: Normal, DDoS, Brute Force, Port Scan.
+    Classifies traffic into: Normal, DDoS, Brute Force, Port Scan, or UNSW-NB15 categories.
     """
     def __init__(self, n_estimators=100):
         self.model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
@@ -38,23 +41,26 @@ class AttackClassifier:
         """
         return self.model.predict_proba(X)
 
-    def save_model(self, path="models/classifier_model.joblib"):
+    def save_model(self, path=None):
         """
         Saves the trained model to a file.
         """
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        joblib.dump(self.model, path)
-        print(f"Classifier model saved to {path}")
+        target_path = path or DEFAULT_MODEL_PATH
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        joblib.dump(self.model, target_path)
+        print(f"Classifier model saved to {target_path}")
 
-    def load_model(self, path="models/classifier_model.joblib"):
+    def load_model(self, path=None):
         """
         Loads the model from a file.
         """
-        if os.path.exists(path):
-            self.model = joblib.load(path)
-            print(f"Classifier model loaded from {path}")
+        target_path = path or DEFAULT_MODEL_PATH
+        if os.path.exists(target_path):
+            self.model = joblib.load(target_path)
+            print(f"Classifier model loaded from {target_path}")
         else:
-            print(f"Error: Model file {path} not found.")
+            print(f"Error: Model file {target_path} not found.")
+
 
 if __name__ == "__main__":
     classifier = AttackClassifier()
