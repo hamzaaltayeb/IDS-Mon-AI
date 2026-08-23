@@ -1,25 +1,34 @@
 import os
 import pandas as pd
+import numpy as np
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Standard numerical features from the real UNSW-NB15 benchmark dataset
-UNSW_NUMERIC_FEATURES = [
-    'dur', 'spkts', 'dpkts', 'sbytes', 'dbytes', 'rate', 'sttl', 'dttl', 
-    'sload', 'dload', 'sloss', 'dloss', 'sinpkt', 'dinpkt', 'sjit', 'djit', 
-    'swin', 'stcpb', 'dtcpb', 'dwin', 'tcprtt', 'synack', 'ackdat', 'smean', 'dmean'
+# The standard numerical features of the 11-feature flow representation
+FLOW_NUMERIC_FEATURES = [
+    'total_flow_size',
+    'average_packet_size',
+    'std_packet_size',
+    'packet_count',
+    'flow_duration',
+    'average_inter_arrival_time',
+    'maximum_inter_arrival_time',
+    'packets_per_second',
+    'bytes_per_second'
 ]
+
+# Legacy compatibility list
+UNSW_NUMERIC_FEATURES = FLOW_NUMERIC_FEATURES
 
 class Preprocessor:
     """
-    Module for cleaning, encoding, and normalizing real network dataset features.
+    Module for cleaning, encoding, and normalizing network flow features.
     """
     def __init__(self, features=None):
         self.scaler = StandardScaler()
         self.label_encoders = {}
-        self.features_to_scale = features or UNSW_NUMERIC_FEATURES
-
+        self.features_to_scale = features or FLOW_NUMERIC_FEATURES
 
     def preprocess(self, df, fit=False):
         """
@@ -30,10 +39,10 @@ class Preprocessor:
         # Ensure all required features are present
         for col in self.features_to_scale:
             if col not in working_df.columns:
-                working_df[col] = 0
+                working_df[col] = 0.0
 
-        # Handle missing values
-        working_df[self.features_to_scale] = working_df[self.features_to_scale].fillna(0)
+        # Handle missing values & infinities
+        working_df[self.features_to_scale] = working_df[self.features_to_scale].replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
         X = working_df[self.features_to_scale]
 
@@ -46,7 +55,7 @@ class Preprocessor:
 
     def encode_labels(self, labels, fit=False):
         """
-        Encodes target labels (e.g., 'Normal', 'DDoS', 'Exploits').
+        Encodes target labels (e.g., 'Normal', 'DDoS', 'Port Scan', 'Brute Force').
         """
         if 'target' not in self.label_encoders:
             self.label_encoders['target'] = LabelEncoder()
@@ -63,16 +72,3 @@ class Preprocessor:
         if 'target' in self.label_encoders:
             return self.label_encoders['target'].inverse_transform(encoded_labels)
         return [str(l) for l in encoded_labels]
-
-if __name__ == "__main__":
-    # Example usage
-    flow_features_file = os.path.join(BASE_DIR, "data", "flow_features.csv")
-    try:
-        features_df = pd.read_csv(flow_features_file)
-        preprocessor = Preprocessor()
-        X_scaled = preprocessor.preprocess(features_df, fit=True)
-        print("Data preprocessed successfully.")
-        print(f"Shape: {X_scaled.shape}")
-    except FileNotFoundError:
-        print(f"Please run feature_extractor.py first to generate {flow_features_file}")
-

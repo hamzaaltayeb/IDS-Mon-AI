@@ -2,6 +2,7 @@ import time
 import math
 import threading
 import numpy as np
+from collections import defaultdict
 
 class FlowRecord:
     """
@@ -42,7 +43,7 @@ class FlowRecord:
         """
         Calculates the 11 standard flow features with strict mathematical safety.
         """
-        duration = max(1e-5, self.last_seen - self.start_time)
+        duration = max(1e-4, self.last_seen - self.start_time)
         pkt_count = max(1, self.packet_count)
         total_size = float(self.total_bytes)
         
@@ -85,6 +86,62 @@ class FlowRecord:
         }
 
 
+class BehavioralTracker:
+    """
+    Maintains short-window multi-flow behavioral statistics for correlation:
+    - Port scan detection (distinct ports probed per source IP)
+    - Brute force connection bursts per source IP on auth ports
+    - DDoS aggregate target flood rates
+    """
+    def __init__(self, window_seconds=15.0):
+        self.window = window_seconds
+        self.src_ports_probed = defaultdict(list) # src_ip -> [(timestamp, dst_port)]
+        self.auth_bursts = defaultdict(list)      # (src_ip, dst_port) -> [timestamp]
+        self.dst_packet_rates = defaultdict(list)  # dst_ip -> [(timestamp, count, bytes)]
+        self.lock = threading.Lock()
+
+    def record_packet(self, src_ip, dst_ip, proto, dst_port, pkt_len, now):
+        with self.lock:
+            cutoff = now - self.window
+            
+            # 1. Track probed ports
+            probes = self.src_ports_probed[src_ip]
+            probes.append((now, dst_port))
+            self.src_ports_probed[src_ip] = [p for p in probes if p[0] >= cutoff]
+
+            # 2. Track auth service attempts
+            if dst_port in [22, 21, 3389, 23, 3306, 5432]:
+                attempts = self.auth_bursts[(src_ip, dst_port)]
+                attempts.append(now)
+                self.auth_bursts[(src_ip, dst_port)] = [t for t in attempts if t >= cutoff]
+
+            # 3. Track target packet rates
+            rates = self.dst_packet_rates[dst_ip]
+            rates.append((now, 1, pkt_len))
+            self.dst_packet_rates[dst_ip] = [r for r in rates if r[0] >= cutoff]
+
+    def get_port_scan_count(self, src_ip, now):
+        with self.lock:
+            cutoff = now - self.window
+            probes = [p[1] for p in self.src_ports_probed.get(src_ip, []) if p[0] >= cutoff]
+            return len(set(probes))
+
+    def get_auth_attempt_count(self, src_ip, dst_port, now):
+        with self.lock:
+            cutoff = now - self.window
+            attempts = [t for t in self.auth_bursts.get((src_ip, dst_port), []) if t >= cutoff]
+            return len(attempts)
+
+    def get_target_traffic_rate(self, dst_ip, now):
+        with self.lock:
+            cutoff = now - self.window
+            rates = [r for r in self.dst_packet_rates.get(dst_ip, []) if r[0] >= cutoff]
+            total_pkts = sum(r[1] for r in rates)
+            total_bytes = sum(r[2] for r in rates)
+            dur = max(1.0, self.window)
+            return (total_pkts / dur), (total_bytes / dur)
+
+
 class FlowTable:
     """
     Thread-safe in-memory table for active network flows with automatic expiration.
@@ -94,10 +151,10 @@ class FlowTable:
         self.max_active_flows = int(max_active_flows)
         self.max_flow_duration = float(max_flow_duration)
         self.flows = {}
+        self.behavioral = BehavioralTracker(window_seconds=15.0)
         self.lock = threading.Lock()
 
     def _get_key(self, src_ip, dst_ip, proto, dst_port, src_port):
-        # 5-tuple key
         return (src_ip, dst_ip, proto, dst_port, src_port)
 
     def process_packet(self, src_ip, dst_ip, proto, dst_port, src_port, pkt_len, pkt_time=None, tcp_flags=None):
@@ -106,9 +163,11 @@ class FlowTable:
 
         key = self._get_key(src_ip, dst_ip, proto, dst_port, src_port)
         
+        # Record behavioral telemetry
+        self.behavioral.record_packet(src_ip, dst_ip, proto, dst_port, pkt_len, pkt_time)
+
         with self.lock:
             if key not in self.flows:
-                # Evict oldest flow if table exceeds max capacity
                 if len(self.flows) >= self.max_active_flows:
                     oldest_key = min(self.flows.keys(), key=lambda k: self.flows[k].last_seen)
                     del self.flows[oldest_key]
@@ -121,6 +180,7 @@ class FlowTable:
     def get_expired_flows(self, current_time=None):
         """
         Extracts and removes expired or terminated flows from the table.
+        Attaches behavioral context metrics for multi-tiered detection arbitration.
         """
         if current_time is None:
             current_time = time.time()
@@ -133,11 +193,17 @@ class FlowTable:
                 duration = current_time - flow.start_time
                 
                 # Expiration conditions:
-                # 1. Idle time exceeds timeout
-                # 2. TCP connection terminated (FIN/RST)
-                # 3. Maximum active session duration exceeded
                 if idle_time >= self.flow_timeout or flow.is_terminated or duration >= self.max_flow_duration:
-                    expired_list.append(flow.calculate_features())
+                    features = flow.calculate_features()
+                    
+                    # Attach behavioral context
+                    features['context_ports_probed'] = self.behavioral.get_port_scan_count(features['source_ip'], current_time)
+                    features['context_auth_attempts'] = self.behavioral.get_auth_attempt_count(features['source_ip'], features['destination_port'], current_time)
+                    tgt_pps, tgt_bps = self.behavioral.get_target_traffic_rate(features['destination_ip'], current_time)
+                    features['context_target_pps'] = tgt_pps
+                    features['context_target_bps'] = tgt_bps
+                    
+                    expired_list.append(features)
                     keys_to_remove.append(key)
 
             for key in keys_to_remove:
@@ -146,13 +212,17 @@ class FlowTable:
         return expired_list
 
     def flush_all_flows(self):
-        """
-        Flushes all active flows immediately (used during graceful shutdown).
-        """
         flushed = []
+        now = time.time()
         with self.lock:
             for flow in self.flows.values():
-                flushed.append(flow.calculate_features())
+                f = flow.calculate_features()
+                f['context_ports_probed'] = self.behavioral.get_port_scan_count(f['source_ip'], now)
+                f['context_auth_attempts'] = self.behavioral.get_auth_attempt_count(f['source_ip'], f['destination_port'], now)
+                tgt_pps, tgt_bps = self.behavioral.get_target_traffic_rate(f['destination_ip'], now)
+                f['context_target_pps'] = tgt_pps
+                f['context_target_bps'] = tgt_bps
+                flushed.append(f)
             self.flows.clear()
         return flushed
 
