@@ -18,7 +18,8 @@ class AIDetectionPipeline:
     """
     Enterprise-Grade Multi-Tiered AI Network Threat Detection & Decision Engine.
     Combines Supervised Random Forest Classification, Unsupervised Isolation Forest,
-    Behavioral Correlation, and Strict Confidence Thresholding to minimize False Positives.
+    Behavioral Correlation, and Strict Confidence Thresholding to eliminate False Positives
+    and ensure legitimate network traffic is classified as BENIGN / NORMAL.
     """
     _instance = None
 
@@ -35,6 +36,7 @@ class AIDetectionPipeline:
         self.anomaly_model = None
         self.classifier_model = None
         self.recent_alerts = {}  # (src_ip, dst_ip, attack_type) -> last_alert_time
+        self.enable_debug_logging = (os.environ.get('AI_DEBUG_PIPELINE', '0') == '1')
         self.load_models()
 
     def load_models(self):
@@ -60,12 +62,12 @@ class AIDetectionPipeline:
 
     def calculate_threat_metrics(self, attack_type, confidence=1.0):
         """
-        Threat Scoring Matrix:
-        - Normal: 0 (LOW)
-        - Unknown / Statistical Anomaly: 50 (MEDIUM)
-        - Port Scan: 70 (HIGH)
-        - Brute Force: 85 (HIGH)
-        - DDoS: 95 (CRITICAL)
+        Threat Scoring Matrix (0 - 100):
+        - NORMAL: 0 (LOW)
+        - UNKNOWN / Statistical Anomaly: 50 (MEDIUM)
+        - PORT_SCAN: 70 (HIGH)
+        - BRUTE_FORCE: 85 (HIGH)
+        - DDOS: 95 (CRITICAL)
         """
         score_matrix = {
             'NORMAL': (0, 'LOW'),
@@ -115,16 +117,17 @@ class AIDetectionPipeline:
     def process_flow(self, raw_flow_data, persist=True):
         """
         Main Multi-Tiered AI Pipeline Execution:
-        1. Feature Validation & Structuring
+        1. Feature Validation & Structuring (11 Features)
         2. Tier 1: Normal Baseline & Local Traffic Verification
-        3. Tier 2: Behavioral Evidence Correlation
-        4. Tier 3: ML Model Inference & Arbitration
+        3. Tier 2: Behavioral Evidence Correlation (DDoS, PortScan, BruteForce)
+        4. Tier 3: ML Model Inference & Arbitration (Random Forest + Isolation Forest)
         5. Threat Scoring & Deduplicated Persistence
         """
         src_ip = str(raw_flow_data.get('source_ip', '127.0.0.1'))
         dst_ip = str(raw_flow_data.get('destination_ip', '10.0.0.1'))
         proto = str(raw_flow_data.get('protocol', 'TCP')).upper()
         dst_port = int(raw_flow_data.get('destination_port', 80))
+        src_port = int(raw_flow_data.get('source_port', 0))
         duration = max(1e-4, float(raw_flow_data.get('flow_duration', 0.1)))
         total_size = max(0.0, float(raw_flow_data.get('total_flow_size', 0.0)))
         pkt_count = max(1, int(raw_flow_data.get('packet_count', 1)))
@@ -168,9 +171,10 @@ class AIDetectionPipeline:
         # TIER 1: Normal Baseline & Background Traffic Protection
         # -------------------------------------------------------------
         is_localhost = (src_ip == '127.0.0.1' and dst_ip == '127.0.0.1')
-        is_standard_dns = (proto == 'UDP' and dst_port in [53, 5353] and pkt_count <= 20 and pps < 500)
-        is_standard_web = (proto == 'TCP' and dst_port in [80, 443, 8080, 8443] and pps < 1200 and pkt_count < 1000)
-        is_standard_ntp = (proto == 'UDP' and dst_port in [123, 67, 68] and pkt_count <= 10)
+        is_standard_dns = (proto == 'UDP' and dst_port in [53, 5353] and pkt_count <= 30 and pps < 500)
+        is_standard_web = (proto == 'TCP' and dst_port in [80, 443, 8080, 8443] and pps < 1200 and pkt_count < 2000)
+        is_standard_ntp = (proto == 'UDP' and dst_port in [123, 67, 68] and pkt_count <= 15)
+        is_standard_icmp = (proto == 'ICMP' and pkt_count <= 20 and pps < 100)
         
         # -------------------------------------------------------------
         # TIER 2: Behavioral Threat Rules
@@ -183,8 +187,11 @@ class AIDetectionPipeline:
         # TIER 3: Machine Learning Model Inference
         # -------------------------------------------------------------
         attack_type = 'NORMAL'
-        confidence = 0.98
+        confidence = 0.95
         prediction = 'NORMAL'
+        raw_pred_label = 'Normal'
+        prob_dict = {'Normal': 1.0}
+        anomaly_pred = 1
 
         if self.classifier_model and self.preprocessor:
             try:
@@ -196,12 +203,13 @@ class AIDetectionPipeline:
                 
                 # Multi-class Classifier
                 clf_pred = self.classifier_model.predict(X_scaled)[0]
-                decoded_class = self.preprocessor.decode_labels([clf_pred])[0].upper().replace(' ', '_')
+                raw_pred_label = self.preprocessor.decode_labels([clf_pred])[0]
+                decoded_class = raw_pred_label.upper().replace(' ', '_')
                 
                 probas = self.classifier_model.predict_proba(X_scaled)[0]
                 max_prob = float(np.max(probas))
                 classes = [c.upper().replace(' ', '_') for c in self.preprocessor.decode_labels(range(len(probas)))]
-                prob_dict = dict(zip(classes, probas))
+                prob_dict = {c: round(float(p), 4) for c, p in zip(classes, probas)}
                 
                 prob_normal = float(prob_dict.get('NORMAL', 0.0))
                 prob_brute = float(prob_dict.get('BRUTE_FORCE', 0.0))
@@ -223,16 +231,14 @@ class AIDetectionPipeline:
                     confidence = max(0.85, prob_brute)
                     prediction = 'ATTACK'
 
-                # B. Normal Baseline Dominance
-                elif is_localhost or is_standard_dns or is_standard_web or is_standard_ntp:
-                    # Legitimate background service traffic
+                # B. Normal Baseline Dominance (Protects legitimate web, DNS, NTP, ICMP, Localhost)
+                elif is_localhost or is_standard_dns or is_standard_web or is_standard_ntp or is_standard_icmp:
                     attack_type = 'NORMAL'
                     confidence = max(0.95, prob_normal)
                     prediction = 'NORMAL'
 
-                # C. High-Confidence ML Classification
+                # C. High-Confidence ML Attack Classification
                 elif decoded_class != 'NORMAL' and max_prob >= self.ATTACK_CONFIDENCE_THRESHOLD:
-                    # Require corroborating evidence or high probability
                     if decoded_class == 'PORT_SCAN' and (probes_cnt >= 3 or dst_port not in [80, 443, 53, 22]):
                         attack_type = 'PORT_SCAN'
                         confidence = max_prob
@@ -250,14 +256,14 @@ class AIDetectionPipeline:
                         confidence = prob_normal
                         prediction = 'NORMAL'
 
-                # D. Unsupervised Anomaly Detection
-                elif anomaly_pred == -1 and prob_normal < 0.40 and not (is_standard_web or is_standard_dns):
+                # D. Unsupervised Anomaly Detection (Isolation Forest flags outlier with low normal confidence)
+                elif anomaly_pred == -1 and prob_normal < 0.35 and not (is_standard_web or is_standard_dns):
                     attack_type = 'UNKNOWN'
                     confidence = 0.70
                     prediction = 'ATTACK'
 
                 else:
-                    # Standard Normal flow
+                    # Default: Normal benign traffic
                     attack_type = 'NORMAL'
                     confidence = max(0.90, prob_normal)
                     prediction = 'NORMAL'
@@ -284,6 +290,13 @@ class AIDetectionPipeline:
         threat_score, severity = self.calculate_threat_metrics(attack_type, confidence)
         indicators = self.generate_indicators(flow_record, attack_type, threat_score)
 
+        # Optional Diagnostic Trace Logging
+        if self.enable_debug_logging:
+            print(f"\n[FLOW] {src_ip}:{src_port} -> {dst_ip}:{dst_port} | Proto: {proto} | Source: {traffic_source}")
+            print(f"[FEATURES] Pkts: {pkt_count}, Bytes: {total_size}, Dur: {duration:.3f}s, PPS: {pps:.1f}, BPS: {bps:.1f}")
+            print(f"[MODEL] Raw Pred: {raw_pred_label}, Probas: {prob_dict}, Confidence: {confidence:.2f}, AnomalyFlag: {anomaly_pred}")
+            print(f"[DECISION] Final Label: {attack_type}, Prediction: {prediction}, Threat Score: {threat_score}/100, Severity: {severity}")
+
         result = {
             'flow': flow_record,
             'prediction': prediction,
@@ -301,39 +314,38 @@ class AIDetectionPipeline:
             flow_id = NetworkFlow.create(flow_record)
             result['flow_id'] = flow_id
             
-            # 2. Save to detections ONLY if confirmed/suspected security incident
-            if prediction == 'ATTACK' and threat_score >= 30:
-                det_id = Detection.create(
-                    flow_id=flow_id,
-                    prediction=prediction,
-                    attack_type=attack_type,
-                    confidence=confidence,
-                    threat_score=threat_score,
-                    severity=severity,
-                    indicators=indicators,
-                    traffic_source=traffic_source,
-                    session_id=session_id
-                )
-                result['detection_id'] = det_id
+            # 2. Save EVERY analyzed classification to detections table (Ensures NORMAL is fully visible in SOC KPIs)
+            det_id = Detection.create(
+                flow_id=flow_id,
+                prediction=prediction,
+                attack_type=attack_type,
+                confidence=confidence,
+                threat_score=threat_score,
+                severity=severity,
+                indicators=indicators,
+                traffic_source=traffic_source,
+                session_id=session_id
+            )
+            result['detection_id'] = det_id
 
-                # 3. Create Alert if Threat Score >= 50 with Deduplication
-                if threat_score >= 50:
-                    alert_key = (src_ip, dst_ip, attack_type)
-                    now = time.time()
-                    last_alert_time = self.recent_alerts.get(alert_key, 0)
-                    
-                    if (now - last_alert_time) >= self.ALERT_DEDUPLICATION_WINDOW:
-                        self.recent_alerts[alert_key] = now
-                        title = f"{attack_type.replace('_', ' ').title()} Threat Detected"
-                        message = f"Suspicious activity ({attack_type}) flagged from {src_ip} targeting {dst_ip}:{dst_port}. Threat Score: {threat_score}/100."
-                        alert_id = Alert.create(
-                            detection_id=det_id,
-                            title=title,
-                            message=message,
-                            severity=severity,
-                            status='NEW'
-                        )
-                        result['alert_id'] = alert_id
+            # 3. Create Alert ONLY for confirmed threat with Threat Score >= 50 and Deduplication
+            if prediction == 'ATTACK' and threat_score >= 50:
+                alert_key = (src_ip, dst_ip, attack_type)
+                now = time.time()
+                last_alert_time = self.recent_alerts.get(alert_key, 0)
+                
+                if (now - last_alert_time) >= self.ALERT_DEDUPLICATION_WINDOW:
+                    self.recent_alerts[alert_key] = now
+                    title = f"{attack_type.replace('_', ' ').title()} Threat Detected"
+                    message = f"Suspicious activity ({attack_type}) flagged from {src_ip} targeting {dst_ip}:{dst_port}. Threat Score: {threat_score}/100."
+                    alert_id = Alert.create(
+                        detection_id=det_id,
+                        title=title,
+                        message=message,
+                        severity=severity,
+                        status='NEW'
+                    )
+                    result['alert_id'] = alert_id
 
         return result
 
