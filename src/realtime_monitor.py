@@ -3,6 +3,15 @@ import sys
 import time
 import signal
 import argparse
+
+# Early graceful shutdown trap
+def _early_signal_trap(signum, frame):
+    print("\n[INFO] Termination requested (Ctrl+C / SIGINT). Exiting cleanly...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, _early_signal_trap)
+signal.signal(signal.SIGTERM, _early_signal_trap)
+
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -163,10 +172,21 @@ class RealTimeMonitor:
 
         self.is_running = True
         start_t = time.time()
+        
+        # Register graceful signal handlers
+        def _signal_handler(signum, frame):
+            if not self.is_running:
+                print("\n[INFO] Shutdown already in progress, please wait...")
+                return
+            print("\n[INFO] Live monitoring termination signal received (Ctrl+C / SIGINT)...")
+            self.is_running = False
+
+        original_sigint = signal.signal(signal.SIGINT, _signal_handler)
+        original_sigterm = signal.signal(signal.SIGTERM, _signal_handler)
 
         try:
             while self.is_running:
-                time.sleep(2.0)
+                time.sleep(1.0)
                 status = live_capture_manager.get_status()
                 
                 if status['packets_captured'] == 0:
@@ -184,12 +204,43 @@ class RealTimeMonitor:
                 
                 if duration and (time.time() - start_t) >= duration:
                     break
-        except KeyboardInterrupt:
-            print("\n[INFO] Live monitoring termination requested by user (Ctrl+C)...")
+        except (KeyboardInterrupt, SystemExit):
+            print("\n[INFO] Live monitoring termination requested...")
         finally:
-            live_capture_manager.stop_capture()
+            self.is_running = False
+            try:
+                live_capture_manager.stop_capture()
+            except (KeyboardInterrupt, SystemExit):
+                pass
+            except Exception as e:
+                print(f"[ERROR] Error stopping live capture: {e}")
+            finally:
+                # Restore original handlers
+                try:
+                    signal.signal(signal.SIGINT, original_sigint)
+                    signal.signal(signal.SIGTERM, original_sigterm)
+                except Exception:
+                    pass
 
 def main():
+    # Global Graceful Signal Handler for Ctrl+C
+    _shutting_down = False
+    def _global_sigint_handler(signum, frame):
+        nonlocal _shutting_down
+        if _shutting_down:
+            print("\n[INFO] Shutdown already in progress, please wait...")
+            return
+        _shutting_down = True
+        print("\n[INFO] Termination requested by user (Ctrl+C / SIGINT)...")
+        try:
+            live_capture_manager.stop_capture()
+        except Exception:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _global_sigint_handler)
+    signal.signal(signal.SIGTERM, _global_sigint_handler)
+
     parser = argparse.ArgumentParser(description="AI-NSMS Real-Time Network Security Monitor (Simulation & Live Modes)")
     parser.add_argument("--mode", type=str, choices=['simulation', 'live'], default='live',
                         help="Monitoring mode: 'live' (real packet capture) or 'simulation' (UNSW-NB15 flows)")
@@ -221,10 +272,16 @@ def main():
         debug_capture=args.debug_capture
     )
 
-    if args.mode == 'live':
-        monitor.run_live(duration=args.iterations)
-    else:
-        monitor.run_simulation(iterations=args.iterations, interval=args.interval)
+    try:
+        if args.mode == 'live':
+            monitor.run_live(duration=args.iterations)
+        else:
+            monitor.run_simulation(iterations=args.iterations, interval=args.interval)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        print(f"\n[ERROR] An unexpected error occurred: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

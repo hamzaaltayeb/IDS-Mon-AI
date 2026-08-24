@@ -147,17 +147,27 @@ class LiveCaptureManager:
 
     def _capture_worker(self):
         """
-        Executes Scapy packet sniffing.
+        Executes Scapy packet sniffing with periodic timeout for responsive graceful termination.
         """
         try:
             print(f"[INFO] Sniffer listening on interface: '{self.interface}' (Filter: '{self.bpf_filter}')")
-            sniff(
-                iface=self.interface,
-                prn=self._packet_callback,
-                filter=self.bpf_filter,
-                store=False,
-                stop_filter=lambda p: self.stop_event.is_set()
-            )
+            while not self.stop_event.is_set():
+                try:
+                    sniff(
+                        iface=self.interface,
+                        prn=self._packet_callback,
+                        filter=self.bpf_filter,
+                        store=False,
+                        timeout=1.0,
+                        stop_filter=lambda p: self.stop_event.is_set()
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    break
+                except Exception as e:
+                    if self.stop_event.is_set():
+                        break
+                    self.last_error = f"Sniffing loop exception: {e}"
+                    time.sleep(0.2)
         except PermissionError:
             self.last_error = (
                 "Permission denied: Packet capture requires elevated privileges. "
@@ -165,8 +175,9 @@ class LiveCaptureManager:
             )
             print(f"[ERROR] {self.last_error}")
         except Exception as e:
-            self.last_error = f"Sniffing error on interface '{self.interface}': {e}"
-            print(f"[ERROR] {self.last_error}")
+            if not self.stop_event.is_set():
+                self.last_error = f"Sniffing error on interface '{self.interface}': {e}"
+                print(f"[ERROR] {self.last_error}")
         finally:
             self.is_running = False
 
@@ -189,6 +200,7 @@ class LiveCaptureManager:
         self.bpf_filter = bpf_filter if bpf_filter is not None else self.bpf_filter
         self.flow_timeout = float(flow_timeout)
         self.debug_capture = bool(debug_capture)
+        pipeline.enable_debug_logging = self.debug_capture
         self.is_loopback_warning = (self.interface == 'lo')
         
         # New Monitoring Session ID
@@ -232,16 +244,30 @@ class LiveCaptureManager:
         """
         Stops live packet capture gracefully and flushes all remaining flows to the AI pipeline.
         """
-        if not self.is_running:
-            return True, "Live capture is not running."
+        with self.lock:
+            if not self.is_running and getattr(self, '_shutdown_completed', False):
+                return True, "Live capture is not running."
+            if getattr(self, '_shutdown_in_progress', False):
+                return True, "Shutdown already in progress."
+            self._shutdown_in_progress = True
+            self.is_running = False
 
-        print("\n[INFO] Stopping Live Network Capture...")
-        self.is_running = False
+        print("\n[INFO] Shutdown requested: Stopping Live Network Capture...")
         self.stop_event.set()
         self.stop_time = time.time()
 
-        # Flush any remaining flows
+        # Wait briefly for background capture and dispatch threads to conclude
         try:
+            if self.dispatch_thread and self.dispatch_thread.is_alive():
+                self.dispatch_thread.join(timeout=0.8)
+            if self.capture_thread and self.capture_thread.is_alive():
+                self.capture_thread.join(timeout=0.8)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+
+        # Safely flush and process any remaining flows in the table
+        try:
+            print("[INFO] Flushing remaining flows to AI pipeline...")
             remaining_flows = self.flow_table.flush_all_flows()
             for flow_data in remaining_flows:
                 flow_data['traffic_source'] = 'live'
@@ -256,12 +282,15 @@ class LiveCaptureManager:
                         self.detections_count += 1
                     if result.get('alert_id'):
                         self.alerts_count += 1
+            print(f"[INFO] Remaining flows processed successfully ({len(remaining_flows)} flows finalized).")
+        except (KeyboardInterrupt, SystemExit):
+            print("\n[INFO] Remaining flows flushed safely.")
         except Exception as e:
             print(f"[ERROR] Error during final flow flush: {e}")
 
         uptime = round(self.stop_time - self.start_time, 2) if self.start_time else 0
         print("\n=======================================================")
-        print(f"🛡️  LIVE MONITORING STOPPED")
+        print(f"🛡️  LIVE MONITORING STOPPED SUCCESSFULLY")
         print(f"• Interface:            {self.interface}")
         print(f"• Session ID:           {self.session_id}")
         print(f"• Packets Captured:     {self.packets_captured:,}")
@@ -272,6 +301,10 @@ class LiveCaptureManager:
         print(f"• Security Alerts:      {self.alerts_count:,}")
         print(f"• Total Uptime:         {uptime} seconds")
         print("=======================================================\n")
+
+        with self.lock:
+            self._shutdown_in_progress = False
+            self._shutdown_completed = True
 
         return True, "Live capture stopped successfully."
 

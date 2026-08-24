@@ -6,25 +6,37 @@ from collections import defaultdict
 
 class FlowRecord:
     """
-    Maintains state and statistics for a single network flow session.
+    Maintains bidirectional state and statistics for a single network flow session.
     """
-    def __init__(self, src_ip, dst_ip, proto, dst_port, src_port=0, start_time=None):
+    def __init__(self, src_ip, dst_ip, proto, src_port=0, dst_port=0, start_time=None):
+        self.initiator_ip = src_ip
+        self.responder_ip = dst_ip
+        self.proto = proto
+        self.initiator_port = src_port
+        self.responder_port = dst_port
+        
+        # Primary reference endpoints
         self.src_ip = src_ip
         self.dst_ip = dst_ip
-        self.proto = proto
-        self.dst_port = dst_port
         self.src_port = src_port
+        self.dst_port = dst_port
         
         self.start_time = start_time if start_time is not None else time.time()
         self.last_seen = self.start_time
+        self.teardown_time = None
         
         self.packet_count = 0
         self.total_bytes = 0
+        self.forward_packets = 0
+        self.reverse_packets = 0
+        self.forward_bytes = 0
+        self.reverse_bytes = 0
+        
         self.packet_lengths = []
         self.arrival_times = []
         self.is_terminated = False
 
-    def add_packet(self, pkt_len, pkt_time=None, tcp_flags=None):
+    def add_packet(self, src_ip, dst_ip, src_port, dst_port, pkt_len, pkt_time=None, tcp_flags=None):
         if pkt_time is None:
             pkt_time = time.time()
             
@@ -34,62 +46,90 @@ class FlowRecord:
         self.packet_lengths.append(pkt_len)
         self.arrival_times.append(pkt_time)
 
+        # Track forward vs reverse traffic
+        if src_ip == self.initiator_ip and src_port == self.initiator_port:
+            self.forward_packets += 1
+            self.forward_bytes += pkt_len
+        else:
+            self.reverse_packets += 1
+            self.reverse_bytes += pkt_len
+
         # Check TCP session termination (FIN: 0x01, RST: 0x04)
         if tcp_flags is not None:
             if tcp_flags & 0x01 or tcp_flags & 0x04:
-                self.is_terminated = True
+                if self.teardown_time is None:
+                    self.teardown_time = pkt_time
 
     def calculate_features(self):
         """
-        Calculates the 11 standard flow features with strict mathematical safety.
+        Calculates the 11 standard flow features with strict mathematical and physical validity:
+        - For single-packet flows (count <= 1), duration, pps, bps, and IAT are 0.0 (insufficient temporal evidence).
+        - For multi-packet flows (count >= 2), duration is computed from real timestamps.
         """
-        duration = max(1e-4, self.last_seen - self.start_time)
-        pkt_count = max(1, self.packet_count)
+        pkt_count = self.packet_count
         total_size = float(self.total_bytes)
         
-        # 1. Average packet size
-        avg_size = total_size / pkt_count
-        
-        # 2. Standard deviation of packet size
-        if len(self.packet_lengths) > 1:
-            std_size = float(np.std(self.packet_lengths))
-        else:
+        if pkt_count <= 1:
+            duration = 0.0
+            pps = 0.0
+            bps = 0.0
+            avg_size = total_size if pkt_count == 1 else 0.0
             std_size = 0.0
-            
-        # 3. Inter-arrival times
-        if len(self.arrival_times) > 1:
-            iats = np.diff(self.arrival_times)
-            avg_iat = float(np.mean(iats))
-            max_iat = float(np.max(iats))
-        else:
             avg_iat = 0.0
             max_iat = 0.0
+            rate_status = "INSUFFICIENT_TEMPORAL_EVIDENCE"
+        else:
+            raw_duration = self.last_seen - self.start_time
+            duration = max(1e-3, raw_duration)  # Physical floor: 1ms
+            pps = float(pkt_count / duration)
+            bps = float(total_size / duration)
+            avg_size = float(total_size / pkt_count)
             
-        # 4. Rates
-        pps = float(pkt_count / duration)
-        bps = float(total_size / duration)
+            # Thread-safe snapshot of packet metrics
+            pkt_lens = list(self.packet_lengths)
+            arr_times = list(self.arrival_times)
+            
+            std_size = float(np.std(pkt_lens)) if len(pkt_lens) > 1 else 0.0
+            
+            if len(arr_times) > 1:
+                iats = np.diff(arr_times)
+                avg_iat = float(np.mean(iats)) if len(iats) > 0 else 0.0
+                max_iat = float(np.max(iats)) if len(iats) > 0 else 0.0
+            else:
+                avg_iat = 0.0
+                max_iat = 0.0
+            rate_status = "CALCULATED"
+
+        # Determine logical service destination port (favor well-known service ports < 1024 or registered < 49152)
+        service_port = self.dst_port
+        if self.src_port in [80, 443, 53, 22, 21, 25, 110, 143, 3389, 3306, 5432, 8080, 8443] and self.dst_port > 1024:
+            service_port = self.src_port
 
         return {
-            'source_ip': self.src_ip,
-            'destination_ip': self.dst_ip,
+            'source_ip': self.initiator_ip,
+            'destination_ip': self.responder_ip,
             'protocol': self.proto,
-            'destination_port': int(self.dst_port),
+            'source_port': int(self.src_port),
+            'destination_port': int(service_port),
             'flow_duration': round(duration, 4),
             'total_flow_size': round(total_size, 2),
             'average_packet_size': round(avg_size, 2),
             'std_packet_size': round(std_size, 2),
             'packet_count': int(pkt_count),
+            'forward_packets': int(self.forward_packets),
+            'reverse_packets': int(self.reverse_packets),
             'average_inter_arrival_time': round(avg_iat, 5),
             'maximum_inter_arrival_time': round(max_iat, 5),
             'packets_per_second': round(pps, 2),
-            'bytes_per_second': round(bps, 2)
+            'bytes_per_second': round(bps, 2),
+            'rate_status': rate_status
         }
 
 
 class BehavioralTracker:
     """
     Maintains short-window multi-flow behavioral statistics for correlation:
-    - Port scan detection (distinct ports probed per source IP)
+    - Port scan detection (distinct ports probed per source IP in window)
     - Brute force connection bursts per source IP on auth ports
     - DDoS aggregate target flood rates
     """
@@ -144,43 +184,52 @@ class BehavioralTracker:
 
 class FlowTable:
     """
-    Thread-safe in-memory table for active network flows with automatic expiration.
+    Thread-safe in-memory table for active network flows using Canonical Bidirectional Session Keys.
     """
-    def __init__(self, flow_timeout=10.0, max_active_flows=10000, max_flow_duration=60.0):
+    def __init__(self, flow_timeout=10.0, max_active_flows=10000, max_flow_duration=60.0, teardown_grace_period=1.0):
         self.flow_timeout = float(flow_timeout)
         self.max_active_flows = int(max_active_flows)
         self.max_flow_duration = float(max_flow_duration)
+        self.teardown_grace_period = float(teardown_grace_period)
         self.flows = {}
         self.behavioral = BehavioralTracker(window_seconds=15.0)
         self.lock = threading.Lock()
 
-    def _get_key(self, src_ip, dst_ip, proto, dst_port, src_port):
-        return (src_ip, dst_ip, proto, dst_port, src_port)
+    @staticmethod
+    def _get_canonical_session_key(src_ip, dst_ip, proto, src_port, dst_port):
+        """
+        Generates a symmetric canonical 5-tuple key so forward and reverse packets
+        of the same session map into the exact same FlowRecord.
+        """
+        proto_str = str(proto).upper()
+        if (src_ip, src_port) <= (dst_ip, dst_port):
+            return (src_ip, dst_ip, proto_str, src_port, dst_port)
+        else:
+            return (dst_ip, src_ip, proto_str, dst_port, src_port)
 
     def process_packet(self, src_ip, dst_ip, proto, dst_port, src_port, pkt_len, pkt_time=None, tcp_flags=None):
         if pkt_time is None:
             pkt_time = time.time()
 
-        key = self._get_key(src_ip, dst_ip, proto, dst_port, src_port)
+        canonical_key = self._get_canonical_session_key(src_ip, dst_ip, proto, src_port, dst_port)
         
         # Record behavioral telemetry
         self.behavioral.record_packet(src_ip, dst_ip, proto, dst_port, pkt_len, pkt_time)
 
         with self.lock:
-            if key not in self.flows:
+            if canonical_key not in self.flows:
                 if len(self.flows) >= self.max_active_flows:
                     oldest_key = min(self.flows.keys(), key=lambda k: self.flows[k].last_seen)
                     del self.flows[oldest_key]
 
-                self.flows[key] = FlowRecord(src_ip, dst_ip, proto, dst_port, src_port, start_time=pkt_time)
+                self.flows[canonical_key] = FlowRecord(src_ip, dst_ip, proto, src_port, dst_port, start_time=pkt_time)
 
-            flow = self.flows[key]
-            flow.add_packet(pkt_len, pkt_time, tcp_flags)
+            flow = self.flows[canonical_key]
+            flow.add_packet(src_ip, dst_ip, src_port, dst_port, pkt_len, pkt_time, tcp_flags)
 
     def get_expired_flows(self, current_time=None):
         """
-        Extracts and removes expired or terminated flows from the table.
-        Attaches behavioral context metrics for multi-tiered detection arbitration.
+        Extracts and removes expired or gracefully terminated flows.
         """
         if current_time is None:
             current_time = time.time()
@@ -192,11 +241,17 @@ class FlowTable:
                 idle_time = current_time - flow.last_seen
                 duration = current_time - flow.start_time
                 
+                # Check teardown grace expiration
+                teardown_expired = False
+                if flow.teardown_time is not None:
+                    if (current_time - flow.teardown_time) >= self.teardown_grace_period:
+                        teardown_expired = True
+
                 # Expiration conditions:
-                if idle_time >= self.flow_timeout or flow.is_terminated or duration >= self.max_flow_duration:
+                if idle_time >= self.flow_timeout or teardown_expired or duration >= self.max_flow_duration:
                     features = flow.calculate_features()
                     
-                    # Attach behavioral context
+                    # Attach multi-flow behavioral context
                     features['context_ports_probed'] = self.behavioral.get_port_scan_count(features['source_ip'], current_time)
                     features['context_auth_attempts'] = self.behavioral.get_auth_attempt_count(features['source_ip'], features['destination_port'], current_time)
                     tgt_pps, tgt_bps = self.behavioral.get_target_traffic_rate(features['destination_ip'], current_time)
