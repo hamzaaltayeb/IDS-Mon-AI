@@ -110,11 +110,17 @@ async function loadAlerts() {
                 </tr>
             `;
         }).join('');
+
+        // Trigger audio alert on new alerts
+        if (window.audioAlerts && data.alerts) {
+            window.audioAlerts.processAlertsList(data.alerts);
+        }
     } catch (e) {
         console.error("Error loading alerts:", e);
     }
 }
 
 loadAlerts();
+setInterval(loadAlerts, 5000);
 </script>
 {% endblock %}

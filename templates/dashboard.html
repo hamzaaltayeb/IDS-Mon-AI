@@ -194,6 +194,11 @@ async function loadDashboardData() {
         const alertsData = await alertsRes.json();
         renderAlertsTable(alertsData.alerts);
 
+        // Process real-time audio alerting on active alerts
+        if (window.audioAlerts && alertsData.alerts) {
+            window.audioAlerts.processAlertsList(alertsData.alerts);
+        }
+
     } catch (e) {
         console.error("Error loading dashboard data:", e);
     }

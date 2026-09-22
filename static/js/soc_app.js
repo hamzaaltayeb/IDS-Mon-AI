@@ -97,6 +97,14 @@ async function simulateLiveFlows(batchSize = 5) {
         const data = await res.json();
         if (data.success) {
             if (typeof loadFlows === 'function') loadFlows();
+            if (window.audioAlerts && Array.isArray(data.results)) {
+                for (const r of data.results) {
+                    if (r.prediction === 'ATTACK' || r.alert_id) {
+                        window.audioAlerts.trigger(r);
+                        break;
+                    }
+                }
+            }
             showToastMessage(`✨ Ingested ${data.count} benchmark flows successfully.`, 'info');
         } else {
             alert(data.error || 'Simulation error');

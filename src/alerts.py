@@ -58,6 +58,13 @@ class AlertSystem:
         
         print(f"\033[91m{alert_msg}\033[0m") # Red text for console
         self.logger.warning(log_msg)
+
+        # Trigger terminal audio notification if enabled
+        try:
+            from engine.audio_alert import audio_alert_controller
+            audio_alert_controller.trigger_alert(attack_type, severity, score)
+        except Exception:
+            pass
         
         return {
             'timestamp': datetime.datetime.now().isoformat(),

@@ -107,7 +107,11 @@
                     <i class="fas fa-shield-virus" style="color: var(--accent-cyan);"></i> SOC Command & Monitoring Center
                     {% endblock %}
                 </div>
-                <div style="display: flex; align-items: center; gap: 20px;">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <!-- Audio Alert Toggle Button -->
+                    <button id="btn-global-audio-toggle" class="btn btn-outline-success btn-sm btn-audio-toggle" onclick="window.audioAlerts && window.audioAlerts.toggleMute()" title="Toggle Audio Alerts On/Off">
+                        <i class="fas fa-volume-high"></i> <span>Audio: ON</span>
+                    </button>
                     <div class="live-indicator">
                         <span class="pulse-dot"></span> AI ENGINE ACTIVE
                     </div>
@@ -131,6 +135,8 @@
         </div>
     </div>
 
+    <!-- Audio Alerting Engine -->
+    <script src="{{ url_for('static', filename='js/audio_alerts.js') }}"></script>
     <script src="{{ url_for('static', filename='js/soc_app.js') }}"></script>
     <script>
         function updateClock() {

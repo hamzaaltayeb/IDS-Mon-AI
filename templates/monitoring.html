@@ -30,6 +30,12 @@
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
             <span id="live-status-badge" class="badge-sev badge-medium">STOPPED / IDLE</span>
+            <span class="badge-sev badge-low audio-status-indicator" style="cursor: pointer;" onclick="window.audioAlerts && window.audioAlerts.toggleMute()">
+                <i class="fas fa-volume-high"></i> 🔊 Audio Alerts: ON
+            </span>
+            <button class="btn btn-outline-secondary btn-sm" onclick="testAudioSoundPrompt()" title="Audition / Test Severity Audio Alerts">
+                <i class="fas fa-play-circle"></i> Test Sound
+            </button>
             <button id="btn-start-live" class="btn btn-success btn-sm" onclick="startLiveCapture()">
                 <i class="fas fa-play"></i> Start Live Capture
             </button>
@@ -297,13 +303,46 @@ async function loadFlows() {
     }
 }
 
+function testAudioSoundPrompt() {
+    const choice = prompt("Select sound to test:\n1 = Warning / Medium (Anomaly)\n2 = High / Attack (Port Scan / Brute Force)\n3 = Critical / DDoS (Volumetric Flood)", "2");
+    if (!choice || !window.audioAlerts) return;
+    
+    // Temporarily ensure context is active
+    window.audioAlerts.getAudioContext();
+    if (choice === '1') {
+        window.audioAlerts.playWarningSound();
+        showToastMessage("🔊 Playing Warning Alert Sound (MEDIUM)", "info");
+    } else if (choice === '2') {
+        window.audioAlerts.playAttackSound();
+        showToastMessage("🔊 Playing Attack Alert Sound (HIGH)", "info");
+    } else if (choice === '3') {
+        window.audioAlerts.playCriticalSound();
+        showToastMessage("🔊 Playing Critical Alert Sound (CRITICAL)", "info");
+    }
+}
+
+let lastLiveAlertsCount = 0;
+async function checkLiveAudioAlerts() {
+    try {
+        const res = await fetch('/api/alerts?limit=5&status=NEW');
+        const data = await res.json();
+        if (data && data.alerts && window.audioAlerts) {
+            window.audioAlerts.processAlertsList(data.alerts);
+        }
+    } catch (e) {
+        console.error("Error checking live audio alerts:", e);
+    }
+}
+
 // Initial setup & Polling
 loadInterfaces();
 loadFlows();
 pollLiveTelemetry();
+checkLiveAudioAlerts();
 
 setInterval(() => {
     loadFlows();
+    checkLiveAudioAlerts();
     if (activeTab === 'live') {
         pollLiveTelemetry();
     }
