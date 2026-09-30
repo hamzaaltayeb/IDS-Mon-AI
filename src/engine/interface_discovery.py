@@ -101,3 +101,12 @@ class InterfaceDiscovery:
             if not iface['is_loopback'] and iface['is_up']:
                 return iface['name']
         return 'lo'
+
+
+if __name__ == '__main__':
+    interfaces = InterfaceDiscovery.get_all_interfaces()
+    for idx, iface in enumerate(interfaces, 1):
+        status = "UP" if iface['is_up'] else "DOWN"
+        ip = iface['ipv4'] if (iface['ipv4'] and iface['ipv4'] != 'None') else 'No IPv4'
+        mac = iface['mac'] if (iface['mac'] and iface['mac'] != 'None') else 'No MAC'
+        print(f"{idx}|{iface['name']}|{iface['type']}|{status}|{ip}|{mac}")

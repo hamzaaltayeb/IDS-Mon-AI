@@ -81,44 +81,6 @@ function showToastMessage(msg, type = "info") {
     }, 4000);
 }
 
-// Simulation Mode: Ingest Batch from UNSW-NB15 Benchmark
-async function simulateLiveFlows(batchSize = 5) {
-    const btn = document.getElementById('btn-simulate');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Ingesting...';
-    }
-    try {
-        const res = await fetch('/api/monitoring/simulate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ batch_size: batchSize })
-        });
-        const data = await res.json();
-        if (data.success) {
-            if (typeof loadFlows === 'function') loadFlows();
-            if (window.audioAlerts && Array.isArray(data.results)) {
-                for (const r of data.results) {
-                    if (r.prediction === 'ATTACK' || r.alert_id) {
-                        window.audioAlerts.trigger(r);
-                        break;
-                    }
-                }
-            }
-            showToastMessage(`✨ Ingested ${data.count} benchmark flows successfully.`, 'info');
-        } else {
-            alert(data.error || 'Simulation error');
-        }
-    } catch (e) {
-        console.error("Simulation error:", e);
-    } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-bolt"></i> Ingest 5 Benchmark Flows';
-        }
-    }
-}
-
 // Live Mode: Start Real-Time Packet Sniffing
 async function startLiveCapture() {
     const ifaceSelect = document.getElementById('live-interface-select');

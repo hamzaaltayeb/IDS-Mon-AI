@@ -150,36 +150,49 @@ class LiveCaptureManager:
         Executes Scapy packet sniffing with periodic timeout for responsive graceful termination.
         """
         try:
-            print(f"[INFO] Sniffer listening on interface: '{self.interface}' (Filter: '{self.bpf_filter}')")
+            filter_desc = f"Filter: '{self.bpf_filter}'" if self.bpf_filter else "No filter (All IP/IPv6)"
+            print(f"[INFO] Sniffer listening on interface: '{self.interface}' ({filter_desc})")
+            err_count = 0
             while not self.stop_event.is_set():
                 try:
+                    sniff_filter = self.bpf_filter if (self.bpf_filter and self.bpf_filter.strip()) else None
                     sniff(
                         iface=self.interface,
                         prn=self._packet_callback,
-                        filter=self.bpf_filter,
+                        filter=sniff_filter,
                         store=False,
                         timeout=1.0,
                         stop_filter=lambda p: self.stop_event.is_set()
                     )
+                    err_count = 0
                 except (KeyboardInterrupt, SystemExit):
                     break
+                except (PermissionError, OSError) as e:
+                    err_msg = str(e).lower()
+                    if "operation not permitted" in err_msg or "permission denied" in err_msg:
+                        self.last_error = "Permission denied: Packet capture requires elevated privileges (CAP_NET_RAW). Re-run with: sudo ./run.sh"
+                        print(f"\n[FATAL ERROR] {self.last_error}\n")
+                        break
+                    err_count += 1
+                    self.last_error = f"Sniffing socket error on '{self.interface}': {e}"
+                    if err_count <= 2:
+                        print(f"[WARNING] {self.last_error}")
+                    time.sleep(0.5)
                 except Exception as e:
                     if self.stop_event.is_set():
                         break
-                    self.last_error = f"Sniffing loop exception: {e}"
-                    time.sleep(0.2)
-        except PermissionError:
-            self.last_error = (
-                "Permission denied: Packet capture requires elevated privileges. "
-                "Run with sudo or execute: sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f ./venv/bin/python)"
-            )
-            print(f"[ERROR] {self.last_error}")
+                    err_count += 1
+                    self.last_error = f"Sniffing error on '{self.interface}': {e}"
+                    if err_count <= 2:
+                        print(f"[WARNING] {self.last_error}")
+                    time.sleep(0.5)
         except Exception as e:
             if not self.stop_event.is_set():
-                self.last_error = f"Sniffing error on interface '{self.interface}': {e}"
+                self.last_error = f"Sniffing initialization error: {e}"
                 print(f"[ERROR] {self.last_error}")
         finally:
             self.is_running = False
+
 
     def start_capture(self, interface=None, bpf_filter=None, flow_timeout=10.0, debug_capture=False):
         """

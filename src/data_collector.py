@@ -61,7 +61,7 @@ class DataCollector:
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 if __name__ == "__main__":
-    # Test with a dummy path or if a pcap exists
+    # Test with a sample path or if a pcap exists
     sample_pcap = os.path.join(BASE_DIR, "data", "sample.pcap")
     out_raw_file = os.path.join(BASE_DIR, "data", "raw_traffic.csv")
     collector = DataCollector(sample_pcap)

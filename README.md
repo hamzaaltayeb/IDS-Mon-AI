@@ -137,30 +137,30 @@ Open your browser at **`http://localhost:5000`** to access the Security Operatio
 
 ### 4. Run Real-Time Live Traffic Monitoring (CLI):
 ```bash
-# List discovered network interfaces on your host:
-python src/realtime_monitor.py --list-interfaces
+```bash
+# 1. Master Single-Command Launch (Recommended):
+sudo ./run.sh
 
-# Start Live Packet Sniffing on your active interface (e.g. wlp108s0, eth0):
-sudo ./venv/bin/python src/realtime_monitor.py --mode live --interface wlp108s0 --flow-timeout 10 --debug-capture
+# Or start manually via CLI:
+# Discover available network interfaces:
+python src/realtime_monitor.py -l
+
+# Run real-time packet capture on your physical interface (e.g. wlp108s0):
+sudo ./venv/bin/python src/realtime_monitor.py -i wlp108s0 -f "ip" -t 10.0
 ```
 
 ---
 
-## 🌐 Dual Monitoring Modes
+## 🌐 Real-Time Operational Architecture
 
-AI-NSMS supports two operational modes:
+AI-NSMS operates exclusively on **real live network traffic** captured from physical or virtual network interfaces:
 
-### Mode 1: Live Network Monitoring Mode (Real Packet Capture)
-- Captures real Ethernet/Wi-Fi frames directly from the selected physical interface.
-- Builds bidirectional session flows using symmetric canonical 5-tuples.
-- Features zero-rate safety protection for single-packet flows to eliminate division-by-epsilon false alarms.
-- Feeds live traffic into the multi-tiered AI decision pipeline in real time.
-
-### Mode 2: Simulation Mode (UNSW-NB15 Benchmark Samples)
-- Useful for offline demonstrations, unit testing, and lab evaluation without network permissions.
-```bash
-python src/realtime_monitor.py --mode simulation -n 20 --interval 1.5
-```
+- **Host Interface Enumeration:** Dynamically discovers all active Ethernet, Wi-Fi, and virtual interfaces.
+- **Packet Ingestion:** Real-time promiscuous sniffing via Scapy `AsyncSniffer` with zero packet payload retention (header inspection only).
+- **Session Aggregation:** Canonical bidirectional 5-tuple grouping (`IP_A, IP_B, proto, Port_A, Port_B`) with a 1.0-second TCP teardown grace period.
+- **Feature Computation:** Instant extraction of 9 statistical flow features per session with mathematical rate safety floors.
+- **AI Classification:** Real-time scoring through Random Forest + Isolation Forest + Behavioral Heuristics.
+- **Instant Response:** Automated database logging, visual SOC alerts, audio warning klaxons, and live telemetry streaming.
 
 ---
 
@@ -232,10 +232,11 @@ hping3 -S --flood -p 80 10.251.32.71
 │   ├── preprocessing.py         # StandardScaler & LabelEncoder Module
 │   ├── anomaly_model.py         # Isolation Forest (Unsupervised Anomaly Model)
 │   ├── classifier_model.py      # Random Forest Multi-Class Classifier
-│   ├── realtime_monitor.py      # CLI Monitoring Entry Point (Live & Simulation)
+│   ├── realtime_monitor.py      # CLI Monitoring Entry Point (Live Real-Time Capture)
 │   └── dashboard.py             # Main Flask SOC Application Entry Point
 ├── templates/                   # High-Tech Cyber SOC Web Views (Jinja2)
-├── static/                      # CSS Styling & JavaScript (Chart.js dynamic charts)
+├── static/                      # CSS Styling & JavaScript (Web Audio API & charts)
+├── run.sh                       # Master Operational Launch Script (Interactive CLI)
 ├── schema.sql                   # Relational Database Schema DDL
 ├── requirements.txt             # Project Python Dependencies
 └── README.md                    # Project Documentation

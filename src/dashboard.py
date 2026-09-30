@@ -73,12 +73,27 @@ def create_app():
 app = create_app()
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
+    default_port = int(os.getenv('PORT', 5000))
     host = os.getenv('HOST', '0.0.0.0')
+    debug_mode = (os.getenv('FLASK_DEBUG', '0') == '1')
+
+    # Gracefully detect if port is occupied and find the first free port
+    import socket
+    port = default_port
+    while port < default_port + 20:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind((host, port))
+                break
+            except OSError:
+                print(f"[NOTICE] Port {port} is occupied by another process. Checking port {port + 1}...")
+                port += 1
+
     print("==================================================================")
     print("🛡️  Intelligent Network Security Monitoring System (AI-NSMS) 🛡️")
     print(f"🚀 SOC Operations Center running at: http://localhost:{port}")
     print("👤 Admin Account:    admin   / Admin@12345")
     print("👤 Analyst Account:  analyst / Analyst@12345")
     print("==================================================================")
-    app.run(debug=True, host=host, port=port)
+    app.run(debug=debug_mode, host=host, port=port)

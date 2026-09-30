@@ -130,10 +130,7 @@
     <div class="soc-card-header">
         <div class="soc-card-title"><i class="fas fa-bell" style="color: var(--sev-critical);"></i> Recent Live Security Alerts</div>
         <div style="display: flex; gap: 10px;">
-            <button id="btn-simulate" class="btn btn-primary btn-sm" onclick="simulateLiveFlows(5)">
-                <i class="fas fa-bolt"></i> Ingest Live Batch
-            </button>
-            <a href="/alerts" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-right"></i> View All</a>
+            <a href="/alerts" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-right"></i> View All Alerts</a>
         </div>
     </div>
     <div class="table-responsive">
@@ -163,120 +160,163 @@
 let timelineChart, attacksChart, severityChart;
 
 async function loadDashboardData() {
+    // 1. Fetch KPI Stats
     try {
-        // 1. Fetch KPI Stats
         const statsRes = await fetch('/api/dashboard/stats');
-        const stats = await statsRes.json();
-        
-        document.getElementById('kpi-total-flows').innerText = stats.total_flows;
-        document.getElementById('kpi-active-alerts').innerText = stats.active_alerts;
-        document.getElementById('kpi-critical-alerts').innerText = stats.critical_alerts;
-        document.getElementById('kpi-ddos').innerText = stats.attacks.ddos;
-        document.getElementById('kpi-port-scan').innerText = stats.attacks.port_scan;
-        document.getElementById('kpi-brute-force').innerText = stats.attacks.brute_force;
-        document.getElementById('kpi-normal').innerText = stats.attacks.normal;
-        document.getElementById('kpi-unknown').innerText = stats.attacks.unknown;
-
-        // 2. Fetch Charts Data
-        const chartsRes = await fetch('/api/dashboard/charts');
-        const chartsData = await chartsRes.json();
-
-        // Metrics
-        document.getElementById('metric-avg-pps').innerText = chartsData.traffic_averages.avg_pps;
-        document.getElementById('metric-max-pps').innerText = chartsData.traffic_averages.max_pps;
-        document.getElementById('metric-avg-bps').innerText = (chartsData.traffic_averages.avg_bps / 1024).toFixed(1);
-        document.getElementById('metric-max-bps').innerText = (chartsData.traffic_averages.max_bps / 1024).toFixed(1);
-
-        renderCharts(chartsData);
-
-        // 3. Fetch Recent Alerts Table
-        const alertsRes = await fetch('/api/alerts?limit=8');
-        const alertsData = await alertsRes.json();
-        renderAlertsTable(alertsData.alerts);
-
-        // Process real-time audio alerting on active alerts
-        if (window.audioAlerts && alertsData.alerts) {
-            window.audioAlerts.processAlertsList(alertsData.alerts);
+        if (statsRes.ok) {
+            const stats = await statsRes.json();
+            const setVal = (id, val) => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = (val !== undefined && val !== null) ? val : 0;
+            };
+            setVal('kpi-total-flows', stats.total_flows);
+            setVal('kpi-active-alerts', stats.active_alerts);
+            setVal('kpi-critical-alerts', stats.critical_alerts);
+            if (stats.attacks) {
+                setVal('kpi-ddos', stats.attacks.ddos);
+                setVal('kpi-port-scan', stats.attacks.port_scan);
+                setVal('kpi-brute-force', stats.attacks.brute_force);
+                setVal('kpi-normal', stats.attacks.normal);
+                setVal('kpi-unknown', stats.attacks.unknown);
+            }
         }
-
     } catch (e) {
-        console.error("Error loading dashboard data:", e);
+        console.warn("KPI stats fetch warning:", e);
+    }
+
+    // 2. Fetch Recent Alerts Table (Runs independently of charts)
+    try {
+        const alertsRes = await fetch('/api/alerts?limit=8');
+        if (alertsRes.ok) {
+            const alertsData = await alertsRes.json();
+            renderAlertsTable(alertsData.alerts || []);
+            if (window.audioAlerts && Array.isArray(alertsData.alerts)) {
+                window.audioAlerts.processAlertsList(alertsData.alerts);
+            }
+        } else {
+            renderAlertsTable([]);
+        }
+    } catch (e) {
+        console.warn("Alerts fetch warning:", e);
+        renderAlertsTable([]);
+    }
+
+    // 3. Fetch Charts & Flow Rate Metrics
+    try {
+        const chartsRes = await fetch('/api/dashboard/charts');
+        if (chartsRes.ok) {
+            const chartsData = await chartsRes.json();
+            if (chartsData.traffic_averages) {
+                const avg_pps_el = document.getElementById('metric-avg-pps');
+                const max_pps_el = document.getElementById('metric-max-pps');
+                const avg_bps_el = document.getElementById('metric-avg-bps');
+                const max_bps_el = document.getElementById('metric-max-bps');
+                if (avg_pps_el) avg_pps_el.innerText = chartsData.traffic_averages.avg_pps || 0;
+                if (max_pps_el) max_pps_el.innerText = chartsData.traffic_averages.max_pps || 0;
+                if (avg_bps_el) avg_bps_el.innerText = ((chartsData.traffic_averages.avg_bps || 0) / 1024).toFixed(1);
+                if (max_bps_el) max_bps_el.innerText = ((chartsData.traffic_averages.max_bps || 0) / 1024).toFixed(1);
+            }
+
+            if (typeof Chart !== 'undefined') {
+                try {
+                    renderCharts(chartsData);
+                } catch (errChart) {
+                    console.warn("Chart rendering warning:", errChart);
+                }
+            } else {
+                console.info("Chart.js is not loaded (offline or CDN blocked). Metrics and alerts table are active.");
+            }
+        }
+    } catch (e) {
+        console.warn("Charts data fetch warning:", e);
     }
 }
 
 function renderCharts(data) {
+    if (typeof Chart === 'undefined') return;
+
     // 1. Timeline Chart
-    const ctxTimeline = document.getElementById('chart-timeline').getContext('2d');
-    if (timelineChart) timelineChart.destroy();
-    timelineChart = new Chart(ctxTimeline, {
-        type: 'line',
-        data: {
-            labels: data.timeline.labels.length ? data.timeline.labels : ['Current'],
-            datasets: [
-                { label: 'DDoS', data: data.timeline.ddos, borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', tension: 0.3, fill: true },
-                { label: 'Brute Force', data: data.timeline.brute_force, borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', tension: 0.3, fill: true },
-                { label: 'Port Scan', data: data.timeline.port_scan, borderColor: '#eab308', backgroundColor: 'rgba(234, 179, 8, 0.1)', tension: 0.3, fill: true },
-                { label: 'Normal', data: data.timeline.normal, borderColor: '#10b981', tension: 0.3 }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
-            scales: {
-                x: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } },
-                y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+    const canvasTimeline = document.getElementById('chart-timeline');
+    if (canvasTimeline) {
+        const ctxTimeline = canvasTimeline.getContext('2d');
+        if (timelineChart) timelineChart.destroy();
+        const tLabels = (data.timeline && data.timeline.labels && data.timeline.labels.length) ? data.timeline.labels : ['Ready'];
+        timelineChart = new Chart(ctxTimeline, {
+            type: 'line',
+            data: {
+                labels: tLabels,
+                datasets: [
+                    { label: 'DDoS', data: (data.timeline && data.timeline.ddos) || [0], borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', tension: 0.3, fill: true },
+                    { label: 'Brute Force', data: (data.timeline && data.timeline.brute_force) || [0], borderColor: '#f97316', backgroundColor: 'rgba(249, 115, 22, 0.1)', tension: 0.3, fill: true },
+                    { label: 'Port Scan', data: (data.timeline && data.timeline.port_scan) || [0], borderColor: '#eab308', backgroundColor: 'rgba(234, 179, 8, 0.1)', tension: 0.3, fill: true },
+                    { label: 'Normal', data: (data.timeline && data.timeline.normal) || [0], borderColor: '#10b981', tension: 0.3 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
+                scales: {
+                    x: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } },
+                    y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+                }
             }
-        }
-    });
+        });
+    }
 
     // 2. Attack Types Doughnut
-    const ctxAttacks = document.getElementById('chart-attacks').getContext('2d');
-    if (attacksChart) attacksChart.destroy();
-    const attackLabels = Object.keys(data.attack_distribution);
-    const attackVals = Object.values(data.attack_distribution);
-    attacksChart = new Chart(ctxAttacks, {
-        type: 'doughnut',
-        data: {
-            labels: attackLabels.length ? attackLabels : ['Normal'],
-            datasets: [{
-                data: attackVals.length ? attackVals : [1],
-                backgroundColor: ['#10b981', '#ef4444', '#f97316', '#eab308', '#06b6d4'],
-                borderWidth: 0
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 11 } } } }
-        }
-    });
+    const canvasAttacks = document.getElementById('chart-attacks');
+    if (canvasAttacks) {
+        const ctxAttacks = canvasAttacks.getContext('2d');
+        if (attacksChart) attacksChart.destroy();
+        const attackLabels = Object.keys(data.attack_distribution || {});
+        const attackVals = Object.values(data.attack_distribution || {});
+        attacksChart = new Chart(ctxAttacks, {
+            type: 'doughnut',
+            data: {
+                labels: attackLabels.length ? attackLabels : ['No Threats Yet'],
+                datasets: [{
+                    data: attackVals.length ? attackVals : [1],
+                    backgroundColor: ['#10b981', '#ef4444', '#f97316', '#eab308', '#06b6d4'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'right', labels: { color: '#9ca3af', font: { size: 11 } } } }
+            }
+        });
+    }
 
     // 3. Severity Bar Chart
-    const ctxSev = document.getElementById('chart-severity').getContext('2d');
-    if (severityChart) severityChart.destroy();
-    const sevMap = data.severity_distribution;
-    severityChart = new Chart(ctxSev, {
-        type: 'bar',
-        data: {
-            labels: ['Low', 'Medium', 'High', 'Critical'],
-            datasets: [{
-                label: 'Detections by Severity',
-                data: [sevMap.LOW || 0, sevMap.MEDIUM || 0, sevMap.HIGH || 0, sevMap.CRITICAL || 0],
-                backgroundColor: ['#10b981', '#eab308', '#f97316', '#ef4444'],
-                borderRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { ticks: { color: '#9ca3af' }, grid: { display: false } },
-                y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+    const canvasSev = document.getElementById('chart-severity');
+    if (canvasSev) {
+        const ctxSev = canvasSev.getContext('2d');
+        if (severityChart) severityChart.destroy();
+        const sevMap = data.severity_distribution || {};
+        severityChart = new Chart(ctxSev, {
+            type: 'bar',
+            data: {
+                labels: ['Low', 'Medium', 'High', 'Critical'],
+                datasets: [{
+                    label: 'Detections by Severity',
+                    data: [sevMap.LOW || 0, sevMap.MEDIUM || 0, sevMap.HIGH || 0, sevMap.CRITICAL || 0],
+                    backgroundColor: ['#10b981', '#eab308', '#f97316', '#ef4444'],
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#9ca3af' }, grid: { display: false } },
+                    y: { ticks: { color: '#6b7280' }, grid: { color: '#1f293d' } }
+                }
             }
-        }
-    });
+        });
+    }
 }
 
 function renderAlertsTable(alerts) {
