@@ -35,6 +35,7 @@ class LiveCaptureManager:
         self.packets_parsed = 0
         self.finalized_flows = 0
         self.analyzed_flows = 0
+        self.early_analyzed_flows = 0
         self.detections_count = 0
         self.alerts_count = 0
         self.start_time = None
@@ -117,29 +118,51 @@ class LiveCaptureManager:
         """
         Background worker that continuously inspects FlowTable for completed flows,
         extracts the 11 features, and feeds them into AIDetectionPipeline.
+        Provides periodic diagnostic telemetry and instant threat logging (Task 9).
         """
+        last_telemetry_log = time.time()
         while not self.stop_event.is_set():
             try:
-                expired_flows = self.flow_table.get_expired_flows()
-                for flow_data in expired_flows:
+                actionable_flows = self.flow_table.get_expired_flows()
+                for flow_data in actionable_flows:
                     flow_data['traffic_source'] = 'live'
                     flow_data['session_id'] = self.session_id
+                    is_active = (flow_data.get('rate_status') == 'ACTIVE_SNAPSHOT')
 
                     with self.lock:
-                        self.finalized_flows += 1
+                        if not is_active:
+                            self.finalized_flows += 1
 
                     # AI Inference & DB Persistence
                     result = pipeline.process_flow(flow_data, persist=True)
 
                     with self.lock:
                         self.analyzed_flows += 1
+                        if is_active:
+                            self.early_analyzed_flows += 1
                         if result.get('prediction') == 'ATTACK':
                             self.detections_count += 1
                         if result.get('alert_id'):
                             self.alerts_count += 1
 
-                    if self.debug_capture:
+                    # Instant threat diagnostic logging (Task 9)
+                    if result.get('prediction') == 'ATTACK' and result.get('threat_score', 0) >= 50:
+                        print(f"[THREAT DETECTED] Flow #{result.get('detection_id', 'N/A')}: "
+                              f"{flow_data['source_ip']}:{flow_data['source_port']} → {flow_data['destination_ip']}:{flow_data['destination_port']} "
+                              f"({flow_data['protocol']}) | Pkts: {flow_data['packet_count']} | Dur: {flow_data['flow_duration']:.2f}s | "
+                              f"Type: {result.get('attack_type')} | Model: {result.get('model_prediction')} ({result.get('model_probability', 0):.2f}) | "
+                              f"Score: {result.get('threat_score')}/100 | Severity: {result.get('severity')}")
+                    elif self.debug_capture:
                         print(f"[FLOW ANALYZED] {flow_data['source_ip']} → {flow_data['destination_ip']}:{flow_data['destination_port']} ({flow_data['protocol']}) | Pkts: {flow_data['packet_count']} | Result: {result.get('attack_type')} (Score: {result.get('threat_score')}/100)")
+
+                # Concise Periodic Telemetry Logging (Task 9)
+                now = time.time()
+                if (now - last_telemetry_log) >= 3.0 and self.packets_captured > 0:
+                    active_cnt = self.flow_table.get_active_flow_count()
+                    print(f"[MONITOR TELEMETRY] Packets: {self.packets_captured:,} | Active Flows: {active_cnt:,} | "
+                          f"Early Analyzed: {self.early_analyzed_flows:,} | Finalized: {self.finalized_flows:,} | "
+                          f"Total Analyzed: {self.analyzed_flows:,} | Detections: {self.detections_count:,} | Alerts: {self.alerts_count:,}")
+                    last_telemetry_log = now
 
             except Exception as e:
                 print(f"[ERROR] Live capture flow dispatch error: {e}")
@@ -225,6 +248,7 @@ class LiveCaptureManager:
         self.packets_parsed = 0
         self.finalized_flows = 0
         self.analyzed_flows = 0
+        self.early_analyzed_flows = 0
         self.detections_count = 0
         self.alerts_count = 0
         self.last_error = None
@@ -349,6 +373,7 @@ class LiveCaptureManager:
                 'active_flows': self.flow_table.get_active_flow_count(),
                 'finalized_flows': self.finalized_flows,
                 'analyzed_flows': self.analyzed_flows,
+                'early_analyzed_flows': self.early_analyzed_flows,
                 'detections_count': self.detections_count,
                 'alerts_count': self.alerts_count,
                 'uptime_seconds': round(uptime, 1),

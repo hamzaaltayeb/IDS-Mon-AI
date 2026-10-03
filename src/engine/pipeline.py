@@ -26,12 +26,13 @@ class AIDetectionPipeline:
     ATTACK_CONFIDENCE_THRESHOLD = 0.55
     ANOMALY_SCORE_THRESHOLD = -0.05
     
-    # Volumetric DDoS Hard Safety Floors (Prevents triggering on single/few packet bursts)
+    # Volumetric DDoS Hard Safety Floors (Physically calibrated to support SYN, UDP, and ICMP floods)
     DDOS_MIN_PACKETS = 50
-    DDOS_MIN_BYTES = 50000.0
-    DDOS_PPS_THRESHOLD = 1500.0
+    DDOS_MIN_BYTES = 2500.0          # 50 pkts * 50 bytes = 2500 bytes (permits 54-60B SYN floods)
+    DDOS_PPS_THRESHOLD = 500.0       # Per-flow sustained volumetric packet rate
+    DDOS_TARGET_PPS_THRESHOLD = 1200.0  # Aggregate target-level flood rate (distributed/randomized attack)
     
-    # Port Scan Multi-Port Reconnaissance Floors
+    # Port Scan Multi-Port Reconnaissance Floors (Per-target host)
     PORT_SCAN_PROBE_THRESHOLD = 10
     PORT_SCAN_MAX_PKTS_PER_PORT = 5
     
@@ -104,15 +105,19 @@ class AIDetectionPipeline:
         port = flow_dict.get('destination_port', 0)
         pkt_count = flow_dict.get('packet_count', 0)
         duration = flow_dict.get('flow_duration', 0)
+        tgt_pps = flow_dict.get('context_target_pps', 0)
 
         if final_label == 'DDOS':
-            indicators.append(f"Volumetric flood signature: packet rate {pps:.1f} pkt/s, throughput {bps/1024:.1f} KB/s")
+            if tgt_pps >= self.DDOS_TARGET_PPS_THRESHOLD and pps < self.DDOS_PPS_THRESHOLD:
+                indicators.append(f"Distributed volumetric flood: target host saturated at {tgt_pps:.1f} pkt/s across aggregated attack flows")
+            else:
+                indicators.append(f"Volumetric flood signature: packet rate {pps:.1f} pkt/s, throughput {bps/1024:.1f} KB/s")
             indicators.append(f"Traffic saturation of {pkt_count} packets ({flow_dict.get('total_flow_size', 0)/1024:.1f} KB) within {duration:.2f}s targeting port {port}")
         elif final_label == 'PORT_SCAN':
             probes = flow_dict.get('context_ports_probed', 0)
             indicators.append(f"Reconnaissance scanning pattern targeting port {port}")
             if probes >= 3:
-                indicators.append(f"Source IP probed {probes} distinct ports in sliding observation window")
+                indicators.append(f"Source IP probed {probes} distinct ports on this target host in sliding observation window")
         elif final_label == 'BRUTE_FORCE':
             auth_attempts = flow_dict.get('context_auth_attempts', 0)
             indicators.append(f"Repetitive authentication pattern against service port {port}")
@@ -159,6 +164,7 @@ class AIDetectionPipeline:
         probes_cnt = int(raw_flow_data.get('context_ports_probed', 0))
         auth_cnt = int(raw_flow_data.get('context_auth_attempts', 0))
         tgt_pps = float(raw_flow_data.get('context_target_pps', pps))
+        tgt_bps = float(raw_flow_data.get('context_target_bps', bps))
 
         flow_record = {
             'source_ip': src_ip,
@@ -178,23 +184,46 @@ class AIDetectionPipeline:
             'traffic_source': traffic_source,
             'session_id': session_id,
             'context_ports_probed': probes_cnt,
-            'context_auth_attempts': auth_cnt
+            'context_auth_attempts': auth_cnt,
+            'context_target_pps': tgt_pps,
+            'context_target_bps': tgt_bps
         }
 
         # -------------------------------------------------------------
         # TIER 1: Behavioral Signals Extraction
         # -------------------------------------------------------------
-        # Hard Safety Floor: Requires minimum packet count AND total bytes AND high sustained rate
-        is_behavioral_ddos = (
+        # A) Single-flow volumetric flood: packet_count >= 50, bytes >= 2500, pps >= 500
+        is_flow_volumetric_ddos = (
             pkt_count >= self.DDOS_MIN_PACKETS and 
             total_size >= self.DDOS_MIN_BYTES and 
-            (pps >= self.DDOS_PPS_THRESHOLD or tgt_pps >= 2500.0)
+            pps >= self.DDOS_PPS_THRESHOLD
         )
-        # Port Scan: Requires multi-port sweep across 10+ distinct ports with few packets per probe
+        # B) Target aggregate flood: target receiving >= 1200 pkts/s (e.g. distributed / randomized attack)
+        is_target_flood_ddos = (
+            tgt_pps >= self.DDOS_TARGET_PPS_THRESHOLD and
+            (pkt_count >= 10 or tgt_pps >= 2500.0)
+        )
+        # C) SYN-flood early-snapshot: half-open SYN-only flow analyzed while active during target flood.
+        #    Individual flows have only 1 packet (so per-flow floors can't fire), but the target-level
+        #    aggregate clearly shows a SYN-flood (>= 300 pps). 'rate_status' is set by FlowTable
+        #    when a flow is marked as ACTIVE_SNAPSHOT via Criterion B (early SYN flood analysis).
+        rate_status = str(raw_flow_data.get('rate_status', ''))
+        is_syn_only_snapshot = bool(raw_flow_data.get('is_syn_only', False))
+        is_syn_flood_snapshot = (
+            rate_status == 'ACTIVE_SNAPSHOT' and
+            is_syn_only_snapshot and
+            tgt_pps >= 300.0
+        )
+        is_behavioral_ddos = is_flow_volumetric_ddos or is_target_flood_ddos or is_syn_flood_snapshot
+
+        # Port Scan: Requires multi-port sweep across 10+ distinct ports on the SAME target host.
+        # Exclude standard web/DNS/NTP client ports from triggering false alarms.
         is_behavioral_portscan = (
             probes_cnt >= self.PORT_SCAN_PROBE_THRESHOLD and 
-            pkt_count <= self.PORT_SCAN_MAX_PKTS_PER_PORT
+            pkt_count <= self.PORT_SCAN_MAX_PKTS_PER_PORT and
+            dst_port not in [53, 123, 80, 443, 8080, 8443]
         )
+        
         # Brute Force: Requires repeated connection bursts on authentication service ports
         is_behavioral_bruteforce = (
             dst_port in [22, 21, 3389, 23, 3306, 5432] and 
@@ -255,31 +284,67 @@ class AIDetectionPipeline:
         if is_behavioral_ddos:
             final_label = 'DDOS'
             prediction = 'ATTACK'
-            decision_confidence = max(prob_ddos, 0.85)
+            decision_confidence = max(prob_ddos, 0.90)
         elif is_behavioral_portscan:
             final_label = 'PORT_SCAN'
             prediction = 'ATTACK'
-            decision_confidence = max(prob_scan, 0.80)
+            decision_confidence = max(prob_scan, 0.85)
         elif is_behavioral_bruteforce:
             final_label = 'BRUTE_FORCE'
             prediction = 'ATTACK'
-            decision_confidence = max(prob_brute, 0.80)
+            decision_confidence = max(prob_brute, 0.85)
 
         # CASE B: High-Confidence Supervised Model Classification
         elif model_prediction != 'Normal' and model_probability >= self.ATTACK_CONFIDENCE_THRESHOLD:
-            # Validate attack category against specific corroborating criteria
-            if model_prediction == 'Port Scan' and (probes_cnt >= 3 or dst_port not in [80, 443, 53, 22]):
-                final_label = 'PORT_SCAN'
-                prediction = 'ATTACK'
-                decision_confidence = model_probability
-            elif model_prediction == 'Brute Force' and (dst_port in [22, 21, 3389, 23, 3306, 5432] or auth_cnt >= 2):
-                final_label = 'BRUTE_FORCE'
-                prediction = 'ATTACK'
-                decision_confidence = model_probability
-            elif model_prediction == 'DDoS' and pkt_count >= self.DDOS_MIN_PACKETS:
-                final_label = 'DDOS'
-                prediction = 'ATTACK'
-                decision_confidence = model_probability
+            # 1. Validate Port Scan against specific corroborating criteria
+            if model_prediction == 'Port Scan':
+                if probes_cnt >= 3 or (dst_port not in [80, 443, 53, 123, 22] and pkt_count <= 5 and avg_inter_arr > 0):
+                    final_label = 'PORT_SCAN'
+                    prediction = 'ATTACK'
+                    decision_confidence = model_probability
+                else:
+                    final_label = 'NORMAL'
+                    prediction = 'NORMAL'
+                    decision_confidence = max(prob_normal, 0.60)
+
+            # 2. Validate Brute Force & resolve DoS/Brute Force confusion
+            elif model_prediction == 'Brute Force':
+                if dst_port in [22, 21, 3389, 23, 3306, 5432] or auth_cnt >= 2:
+                    final_label = 'BRUTE_FORCE'
+                    prediction = 'ATTACK'
+                    decision_confidence = model_probability
+                elif pps >= 250.0 or tgt_pps >= 800.0:
+                    # Resolve dataset confusion: UNSW-NB15 DoS flows misclassified as Brute Force
+                    final_label = 'DDOS'
+                    prediction = 'ATTACK'
+                    decision_confidence = max(model_probability, 0.85)
+                else:
+                    final_label = 'NORMAL'
+                    prediction = 'NORMAL'
+                    decision_confidence = max(prob_normal, 0.60)
+
+            # 3. Validate DDoS (CRITICAL FIX FOR EXAGGERATED FALSE ALARMS & REAL DETECTION)
+            elif model_prediction == 'DDoS':
+                # Genuine flood corroboration: Requires high rate OR target flood OR severe anomaly with rate >= 100
+                is_genuine_flood = (
+                    pps >= 200.0 or 
+                    tgt_pps >= 800.0 or 
+                    (pkt_count >= 50 and anomaly_prediction == -1 and pps >= 100.0)
+                )
+                if is_genuine_flood:
+                    final_label = 'DDOS'
+                    prediction = 'ATTACK'
+                    decision_confidence = model_probability
+                elif pps < 50.0 and tgt_pps < 300.0:
+                    # Slow, ordinary web/download session (e.g. Google 8.9 pps) -> Suppress exaggerated false alarm!
+                    final_label = 'NORMAL'
+                    prediction = 'NORMAL'
+                    decision_confidence = max(prob_normal, 0.70)
+                else:
+                    final_label = 'UNKNOWN'
+                    prediction = 'ATTACK'
+                    decision_confidence = model_probability
+
             else:
                 # Weak category match -> classify as UNKNOWN statistical threat
                 final_label = 'UNKNOWN'
@@ -314,7 +379,7 @@ class AIDetectionPipeline:
             print(f"[FEATURES] PPS: {pps:.1f} | BPS: {bps:.1f} | AvgSize: {avg_size:.1f} | StdSize: {std_size:.1f} | AvgIAT: {avg_inter_arr:.4f}s")
             print(f"[MODEL] Raw Pred: {model_prediction} | Max Prob: {model_probability:.4f} | Probas: {prob_dict}")
             print(f"[ANOMALY] Pred: {anomaly_prediction} (+1=Inlier, -1=Outlier) | Anomaly Score: {anomaly_score:.4f}")
-            print(f"[BEHAVIOR] DDoS: {is_behavioral_ddos} | PortScan: {is_behavioral_portscan} (Probes: {probes_cnt}) | BruteForce: {is_behavioral_bruteforce} (Bursts: {auth_cnt})")
+            print(f"[BEHAVIOR] DDoS: {is_behavioral_ddos} (TgtPPS: {tgt_pps:.1f}) | PortScan: {is_behavioral_portscan} (Probes: {probes_cnt}) | BruteForce: {is_behavioral_bruteforce} (Bursts: {auth_cnt})")
             print(f"[DECISION] Final Label: {final_label} | Prediction: {prediction} | Threat Score: {threat_score}/100 | Severity: {severity} | Decision Confidence: {decision_confidence:.4f}")
             print("============================================================\n")
 

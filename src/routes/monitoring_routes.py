@@ -122,6 +122,7 @@ def reset_monitoring_data():
             live_capture_manager.packets_parsed = 0
             live_capture_manager.finalized_flows = 0
             live_capture_manager.analyzed_flows = 0
+            live_capture_manager.early_analyzed_flows = 0
             live_capture_manager.detections_count = 0
             live_capture_manager.alerts_count = 0
             live_capture_manager.flow_table = live_capture_manager.flow_table.__class__(flow_timeout=live_capture_manager.flow_timeout)
