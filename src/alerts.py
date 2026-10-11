@@ -27,27 +27,28 @@ class AlertSystem:
     def calculate_score(self, attack_type, confidence=1.0):
         """
         Calculates a threat score (0-100) and severity level based on attack type.
-        Target scope: Normal, DDoS, Brute Force, Port Scan, and Unknown.
+        Supports both uppercase ('DDOS', 'PORT_SCAN') and titlecase ('DDoS', 'Port Scan').
         """
         scores = {
-            'Normal': (0, 'Low'),
-            'DDoS': (95, 'Critical'),
-            'Brute Force': (85, 'High'),
-            'Port Scan': (70, 'High'),
-            'Unknown': (50, 'Medium')
+            'NORMAL': (0, 'Low'),
+            'DDOS': (95, 'Critical'),
+            'BRUTE_FORCE': (85, 'High'),
+            'PORT_SCAN': (70, 'High'),
+            'UNKNOWN': (60, 'Medium')
         }
         
-        base_score, severity = scores.get(attack_type, (50, 'Medium'))
+        normalized = str(attack_type).upper().replace(' ', '_')
+        base_score, severity = scores.get(normalized, (50, 'Medium'))
         final_score = min(100, max(0, int(base_score * confidence)))
         
         return final_score, severity
-
 
     def trigger_alert(self, ip_address, attack_type, confidence=1.0):
         """
         Prints an alert message and logs it to the file.
         """
-        if attack_type == 'Normal':
+        normalized = str(attack_type).upper().replace(' ', '_')
+        if normalized == 'NORMAL':
             return None
 
         score, severity = self.calculate_score(attack_type, confidence)

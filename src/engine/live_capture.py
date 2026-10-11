@@ -16,7 +16,7 @@ class LiveCaptureManager:
     """
     _instance = None
 
-    def __init__(self, interface='wlp108s0', bpf_filter='ip', flow_timeout=10.0, debug_capture=False):
+    def __init__(self, interface=None, bpf_filter='ip', flow_timeout=10.0, debug_capture=False):
         self.interface = interface
         self.bpf_filter = bpf_filter
         self.flow_timeout = float(flow_timeout)
@@ -184,6 +184,7 @@ class LiveCaptureManager:
                         prn=self._packet_callback,
                         filter=sniff_filter,
                         store=False,
+                        promisc=True,
                         timeout=1.0,
                         stop_filter=lambda p: self.stop_event.is_set()
                     )
@@ -227,10 +228,14 @@ class LiveCaptureManager:
         # Interface selection & validation
         all_ifaces = InterfaceDiscovery.get_all_interfaces()
         iface_names = [i['name'] for i in all_ifaces]
-        
+
         target_iface = interface or self.interface or InterfaceDiscovery.get_default_active_interface()
-        if target_iface not in iface_names and iface_names:
-            target_iface = InterfaceDiscovery.get_default_active_interface()
+
+        if target_iface not in iface_names:
+            fallback = InterfaceDiscovery.get_default_active_interface()
+            print(f"[WARNING] Requested interface '{target_iface}' not found. "
+                  f"Falling back to auto-detected interface: '{fallback}'")
+            target_iface = fallback
 
         self.interface = target_iface
         self.bpf_filter = bpf_filter if bpf_filter is not None else self.bpf_filter
@@ -327,7 +332,7 @@ class LiveCaptureManager:
 
         uptime = round(self.stop_time - self.start_time, 2) if self.start_time else 0
         print("\n=======================================================")
-        print(f"🛡️  LIVE MONITORING STOPPED SUCCESSFULLY")
+        print(f"[INFO] LIVE MONITORING STOPPED SUCCESSFULLY")
         print(f"• Interface:            {self.interface}")
         print(f"• Session ID:           {self.session_id}")
         print(f"• Packets Captured:     {self.packets_captured:,}")

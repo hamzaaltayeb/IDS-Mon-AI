@@ -93,7 +93,7 @@ class RealTimeMonitor:
         print(f"• Available Interfaces: {', '.join(iface_names)}")
         if selected_iface == 'lo':
             print(f"\n⚠️  WARNING: You are monitoring loopback traffic only (127.0.0.1).")
-            print(f"    For real LAN/Wi-Fi traffic, select your physical interface (e.g. wlp108s0).")
+            print(f"    For real LAN/Wi-Fi traffic, select your physical interface (e.g. eth0, wlan0, vboxnet0).")
         print(f"=======================================================\n")
 
         success, msg = live_capture_manager.start_capture(
@@ -199,14 +199,14 @@ def main():
         epilog="""
 Examples:
   sudo python realtime_monitor.py                        # Auto-detect interface
-  sudo python realtime_monitor.py -i wlp108s0           # Specific Wi-Fi interface
+  sudo python realtime_monitor.py -i eth0                # Specific interface (eth0, wlan0, vboxnet0)
   sudo python realtime_monitor.py -i eth0 -t 5.0        # Ethernet, 5s flow timeout
   sudo python realtime_monitor.py -l                     # List available interfaces
   sudo python realtime_monitor.py --debug-capture        # Verbose packet header logging
         """
     )
     parser.add_argument("-i", "--interface", type=str, default=None,
-                        help="Network interface (e.g. wlp108s0, eth0, lo). Auto-detected if not specified.")
+                        help="Network interface (e.g. eth0, wlan0, vboxnet0, lo). Auto-detected if not specified.")
     parser.add_argument("-f", "--filter", type=str, default="ip",
                         help="BPF capture filter (default: 'ip'). Examples: 'tcp', 'udp', 'not port 22'")
     parser.add_argument("-t", "--flow-timeout", type=float, default=10.0,

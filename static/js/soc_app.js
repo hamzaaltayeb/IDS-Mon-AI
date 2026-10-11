@@ -108,7 +108,7 @@ async function startLiveCapture() {
         const data = await res.json();
         if (data.success) {
             updateLiveTelemetryUI(data.status);
-            showToastMessage(`🚀 ${data.message}`, 'success');
+            showToastMessage(data.message, 'success');
         } else {
             alert(data.message || data.error || 'Could not start live capture.');
         }
@@ -139,7 +139,7 @@ async function stopLiveCapture() {
         const data = await res.json();
         if (data.status) {
             updateLiveTelemetryUI(data.status);
-            showToastMessage('⏹️ Live packet capture stopped.', 'info');
+            showToastMessage('Live packet capture stopped.', 'info');
         }
     } catch (e) {
         console.error("Error stopping live capture:", e);
@@ -176,6 +176,12 @@ function updateLiveTelemetryUI(status) {
     const errorBox = document.getElementById('live-error-box');
     const loopbackWarningBox = document.getElementById('live-loopback-warning');
 
+    const btnStart = document.getElementById('btn-start-live');
+    const btnStop = document.getElementById('btn-stop-live');
+    const ifaceSelect = document.getElementById('live-interface-select');
+    const filterInput = document.getElementById('live-filter-input');
+    const timeoutInput = document.getElementById('live-timeout-input');
+
     if (badge) {
         if (status.is_running) {
             badge.className = 'badge-sev badge-low';
@@ -184,6 +190,36 @@ function updateLiveTelemetryUI(status) {
             badge.className = 'badge-sev badge-medium';
             badge.innerText = 'STOPPED / IDLE';
         }
+    }
+
+    // Synchronize buttons and inputs to prevent invalid state during active capture
+    if (btnStart) {
+        btnStart.disabled = !!status.is_running;
+        btnStart.style.opacity = status.is_running ? '0.6' : '1.0';
+    }
+    if (btnStop) {
+        btnStop.disabled = !status.is_running;
+        btnStop.style.opacity = !status.is_running ? '0.6' : '1.0';
+    }
+    if (ifaceSelect && status.interface) {
+        // If option exists, sync value if monitoring is running or select is uninitialized
+        const opt = ifaceSelect.querySelector(`option[value="${status.interface}"]`);
+        if (opt && (status.is_running || !ifaceSelect.value || ifaceSelect.value === '')) {
+            ifaceSelect.value = status.interface;
+        }
+        ifaceSelect.disabled = !!status.is_running;
+    }
+    if (filterInput && status.bpf_filter !== undefined && status.is_running) {
+        filterInput.value = status.bpf_filter;
+        filterInput.disabled = true;
+    } else if (filterInput && !status.is_running) {
+        filterInput.disabled = false;
+    }
+    if (timeoutInput && status.flow_timeout !== undefined && status.is_running) {
+        timeoutInput.value = status.flow_timeout;
+        timeoutInput.disabled = true;
+    } else if (timeoutInput && !status.is_running) {
+        timeoutInput.disabled = false;
     }
 
     if (packetsEl) packetsEl.innerText = (status.packets_captured || 0).toLocaleString();

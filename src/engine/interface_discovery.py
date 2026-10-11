@@ -10,26 +10,26 @@ class InterfaceDiscovery:
     """
     @staticmethod
     def get_ip_address(ifname):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            return socket.inet_ntoa(fcntl.ioctl(
-                s.fileno(),
-                0x8915,  # SIOCGIFADDR
-                struct.pack('256s', ifname[:15].encode('utf-8'))
-            )[20:24])
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                return socket.inet_ntoa(fcntl.ioctl(
+                    s.fileno(),
+                    0x8915,  # SIOCGIFADDR
+                    struct.pack('256s', ifname[:15].encode('utf-8'))
+                )[20:24])
         except Exception:
             return None
 
     @staticmethod
     def get_mac_address(ifname):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            info = fcntl.ioctl(
-                s.fileno(),
-                0x8927,  # SIOCGIFHWADDR
-                struct.pack('256s', ifname[:15].encode('utf-8'))
-            )
-            return ':'.join(['%02x' % b for b in info[18:24]])
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                info = fcntl.ioctl(
+                    s.fileno(),
+                    0x8927,  # SIOCGIFHWADDR
+                    struct.pack('256s', ifname[:15].encode('utf-8'))
+                )
+                return ':'.join(['%02x' % b for b in info[18:24]])
         except Exception:
             return None
 
@@ -61,6 +61,8 @@ class InterfaceDiscovery:
             is_loopback = (ifname == 'lo')
             if is_loopback:
                 iface_type = 'Loopback'
+            elif ifname.startswith('vboxnet') or ifname.startswith('virbr') or ifname.startswith('br-'):
+                iface_type = 'VirtualBox/Bridge'
             elif ifname.startswith('wl') or 'wifi' in ifname or 'wlan' in ifname:
                 iface_type = 'Wi-Fi'
             elif ifname.startswith('tun') or ifname.startswith('tap') or ifname.startswith('docker') or ifname.startswith('veth'):
@@ -76,6 +78,8 @@ class InterfaceDiscovery:
                 desc += f" - IPv4: {ipv4}"
             if not is_up:
                 desc += " [DOWN]"
+            if iface_type == 'VirtualBox/Bridge':
+                desc += " [Enable Promiscuous: Allow All in VirtualBox settings for cross-VM capture]"
 
             result.append({
                 'name': ifname,

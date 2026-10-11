@@ -27,10 +27,10 @@ class AIDetectionPipeline:
     ANOMALY_SCORE_THRESHOLD = -0.05
     
     # Volumetric DDoS Hard Safety Floors (Physically calibrated to support SYN, UDP, and ICMP floods)
-    DDOS_MIN_PACKETS = 50
-    DDOS_MIN_BYTES = 2500.0          # 50 pkts * 50 bytes = 2500 bytes (permits 54-60B SYN floods)
-    DDOS_PPS_THRESHOLD = 500.0       # Per-flow sustained volumetric packet rate
-    DDOS_TARGET_PPS_THRESHOLD = 1200.0  # Aggregate target-level flood rate (distributed/randomized attack)
+    DDOS_MIN_PACKETS = 25
+    DDOS_MIN_BYTES = 1250.0          # 25 pkts * 50 bytes = 1250 bytes (permits 54-60B SYN floods)
+    DDOS_PPS_THRESHOLD = 150.0       # Per-flow sustained volumetric packet rate
+    DDOS_TARGET_PPS_THRESHOLD = 150.0  # Aggregate target-level flood rate (distributed/randomized attack)
     
     # Port Scan Multi-Port Reconnaissance Floors (Per-target host)
     PORT_SCAN_PROBE_THRESHOLD = 10
@@ -82,16 +82,19 @@ class AIDetectionPipeline:
         """
         score_matrix = {
             'NORMAL': (0, 'LOW'),
-            'UNKNOWN': (50, 'MEDIUM'),
+            'UNKNOWN': (60, 'MEDIUM'),
             'PORT_SCAN': (70, 'HIGH'),
             'BRUTE_FORCE': (85, 'HIGH'),
             'DDOS': (95, 'CRITICAL')
         }
-        base_score, severity = score_matrix.get(final_label.upper(), (50, 'MEDIUM'))
+        base_score, severity = score_matrix.get(final_label.upper(), (60, 'MEDIUM'))
         if final_label.upper() == 'NORMAL':
             return 0, 'LOW'
             
-        scaled_score = int(base_score * max(0.65, min(1.0, decision_confidence)))
+        scaled_score = int(base_score * max(0.70, min(1.0, decision_confidence)))
+        # Ensure statistical anomalies reliably meet the alert threshold (>= 50)
+        if final_label.upper() == 'UNKNOWN':
+            scaled_score = max(50, scaled_score)
         final_score = min(100, max(30, scaled_score))
         return final_score, severity
 
@@ -192,36 +195,35 @@ class AIDetectionPipeline:
         # -------------------------------------------------------------
         # TIER 1: Behavioral Signals Extraction
         # -------------------------------------------------------------
-        # A) Single-flow volumetric flood: packet_count >= 50, bytes >= 2500, pps >= 500
+        # A) Single-flow volumetric flood: packet_count >= 25, bytes >= 1250, pps >= 150
         is_flow_volumetric_ddos = (
             pkt_count >= self.DDOS_MIN_PACKETS and 
             total_size >= self.DDOS_MIN_BYTES and 
             pps >= self.DDOS_PPS_THRESHOLD
         )
-        # B) Target aggregate flood: target receiving >= 1200 pkts/s (e.g. distributed / randomized attack)
+        # B) Target aggregate flood: target receiving >= 150 pkts/s (e.g. distributed / randomized attack)
         is_target_flood_ddos = (
             tgt_pps >= self.DDOS_TARGET_PPS_THRESHOLD and
-            (pkt_count >= 10 or tgt_pps >= 2500.0)
+            (pkt_count >= 3 or tgt_pps >= 300.0)
         )
-        # C) SYN-flood early-snapshot: half-open SYN-only flow analyzed while active during target flood.
-        #    Individual flows have only 1 packet (so per-flow floors can't fire), but the target-level
-        #    aggregate clearly shows a SYN-flood (>= 300 pps). 'rate_status' is set by FlowTable
-        #    when a flow is marked as ACTIVE_SNAPSHOT via Criterion B (early SYN flood analysis).
+        # C) SYN-flood detection: half-open SYN flow analyzed while target is under flood (>= 150 pps).
         rate_status = str(raw_flow_data.get('rate_status', ''))
-        is_syn_only_snapshot = bool(raw_flow_data.get('is_syn_only', False))
-        is_syn_flood_snapshot = (
-            rate_status == 'ACTIVE_SNAPSHOT' and
-            is_syn_only_snapshot and
-            tgt_pps >= 300.0
+        is_syn_only_flow = bool(raw_flow_data.get('is_syn_only', False))
+        is_syn_flood = (
+            is_syn_only_flow and
+            tgt_pps >= 150.0
         )
-        is_behavioral_ddos = is_flow_volumetric_ddos or is_target_flood_ddos or is_syn_flood_snapshot
+        is_behavioral_ddos = is_flow_volumetric_ddos or is_target_flood_ddos or is_syn_flood
 
         # Port Scan: Requires multi-port sweep across 10+ distinct ports on the SAME target host.
-        # Exclude standard web/DNS/NTP client ports from triggering false alarms.
+        # Exclude standard web/DNS/NTP client ports from triggering false alarms during isolated web browsing,
+        # but do not exclude them if part of a broad multi-port probe sweep or pure SYN scan.
+        is_standard_client_port = dst_port in [53, 123, 80, 443, 8080, 8443]
+        is_syn_probe = bool(raw_flow_data.get('is_syn_only', False))
         is_behavioral_portscan = (
             probes_cnt >= self.PORT_SCAN_PROBE_THRESHOLD and 
             pkt_count <= self.PORT_SCAN_MAX_PKTS_PER_PORT and
-            dst_port not in [53, 123, 80, 443, 8080, 8443]
+            (not is_standard_client_port or probes_cnt >= 15 or is_syn_probe)
         )
         
         # Brute Force: Requires repeated connection bursts on authentication service ports
@@ -279,33 +281,39 @@ class AIDetectionPipeline:
         final_label = 'NORMAL'
         prediction = 'NORMAL'
         decision_confidence = prob_normal
+        decision_method = 'NORMAL_BASELINE'
 
         # CASE A: Strong Corroborated Behavioral Signatures (Highest Priority)
         if is_behavioral_ddos:
             final_label = 'DDOS'
             prediction = 'ATTACK'
             decision_confidence = max(prob_ddos, 0.90)
+            decision_method = 'BEHAVIORAL_SIGNATURE'
         elif is_behavioral_portscan:
             final_label = 'PORT_SCAN'
             prediction = 'ATTACK'
             decision_confidence = max(prob_scan, 0.85)
+            decision_method = 'BEHAVIORAL_SIGNATURE'
         elif is_behavioral_bruteforce:
             final_label = 'BRUTE_FORCE'
             prediction = 'ATTACK'
             decision_confidence = max(prob_brute, 0.85)
+            decision_method = 'BEHAVIORAL_SIGNATURE'
 
         # CASE B: High-Confidence Supervised Model Classification
         elif model_prediction != 'Normal' and model_probability >= self.ATTACK_CONFIDENCE_THRESHOLD:
             # 1. Validate Port Scan against specific corroborating criteria
             if model_prediction == 'Port Scan':
-                if probes_cnt >= 3 or (dst_port not in [80, 443, 53, 123, 22] and pkt_count <= 5 and avg_inter_arr > 0):
+                if probes_cnt >= 3 or (dst_port not in [80, 443, 53, 123] and pkt_count <= 5 and avg_inter_arr > 0):
                     final_label = 'PORT_SCAN'
                     prediction = 'ATTACK'
                     decision_confidence = model_probability
+                    decision_method = 'SUPERVISED_RF'
                 else:
                     final_label = 'NORMAL'
                     prediction = 'NORMAL'
                     decision_confidence = max(prob_normal, 0.60)
+                    decision_method = 'NORMAL_BASELINE'
 
             # 2. Validate Brute Force & resolve DoS/Brute Force confusion
             elif model_prediction == 'Brute Force':
@@ -313,55 +321,63 @@ class AIDetectionPipeline:
                     final_label = 'BRUTE_FORCE'
                     prediction = 'ATTACK'
                     decision_confidence = model_probability
+                    decision_method = 'SUPERVISED_RF'
                 elif pps >= 250.0 or tgt_pps >= 800.0:
                     # Resolve dataset confusion: UNSW-NB15 DoS flows misclassified as Brute Force
                     final_label = 'DDOS'
                     prediction = 'ATTACK'
                     decision_confidence = max(model_probability, 0.85)
+                    decision_method = 'BEHAVIORAL_CORROBORATION'
                 else:
                     final_label = 'NORMAL'
                     prediction = 'NORMAL'
                     decision_confidence = max(prob_normal, 0.60)
+                    decision_method = 'NORMAL_BASELINE'
 
             # 3. Validate DDoS (CRITICAL FIX FOR EXAGGERATED FALSE ALARMS & REAL DETECTION)
             elif model_prediction == 'DDoS':
-                # Genuine flood corroboration: Requires high rate OR target flood OR severe anomaly with rate >= 100
+                # Genuine flood corroboration: Requires high rate OR target flood OR severe anomaly with rate >= 80
                 is_genuine_flood = (
-                    pps >= 200.0 or 
-                    tgt_pps >= 800.0 or 
-                    (pkt_count >= 50 and anomaly_prediction == -1 and pps >= 100.0)
+                    pps >= 100.0 or 
+                    tgt_pps >= 150.0 or 
+                    (pkt_count >= 25 and anomaly_prediction == -1 and pps >= 60.0)
                 )
                 if is_genuine_flood:
                     final_label = 'DDOS'
                     prediction = 'ATTACK'
                     decision_confidence = model_probability
-                elif pps < 50.0 and tgt_pps < 300.0:
+                    decision_method = 'SUPERVISED_RF'
+                elif pps < 30.0 and tgt_pps < 100.0:
                     # Slow, ordinary web/download session (e.g. Google 8.9 pps) -> Suppress exaggerated false alarm!
                     final_label = 'NORMAL'
                     prediction = 'NORMAL'
                     decision_confidence = max(prob_normal, 0.70)
+                    decision_method = 'NORMAL_BASELINE'
                 else:
                     final_label = 'UNKNOWN'
                     prediction = 'ATTACK'
                     decision_confidence = model_probability
+                    decision_method = 'SUPERVISED_RF'
 
             else:
-                # Weak category match -> classify as UNKNOWN statistical threat
                 final_label = 'UNKNOWN'
                 prediction = 'ATTACK'
                 decision_confidence = model_probability
+                decision_method = 'SUPERVISED_RF'
 
-        # CASE C: Genuine Statistical Anomaly with Low Supervised Confidence
-        elif anomaly_prediction == -1 and anomaly_score <= self.ANOMALY_SCORE_THRESHOLD and prob_normal < 0.40:
+        # CASE C: Genuine Statistical Anomaly with Low/Uncertain Supervised Confidence
+        elif (anomaly_prediction == -1 or anomaly_score <= self.ANOMALY_SCORE_THRESHOLD) and prob_normal < 0.65:
             final_label = 'UNKNOWN'
             prediction = 'ATTACK'
-            decision_confidence = float(abs(anomaly_score) / (abs(anomaly_score) + 0.20))
+            decision_confidence = float(max(0.70, abs(anomaly_score) / (abs(anomaly_score) + 0.20)))
+            decision_method = 'ISOLATION_FOREST_ANOMALY'
 
         # CASE D: Default Normal Traffic
         else:
             final_label = 'NORMAL'
             prediction = 'NORMAL'
             decision_confidence = max(prob_normal, 0.50)
+            decision_method = 'NORMAL_BASELINE'
 
         # -------------------------------------------------------------
         # TIER 4: Threat Scoring & Indicator Generation
@@ -388,6 +404,7 @@ class AIDetectionPipeline:
             'prediction': prediction,
             'attack_type': final_label,
             'final_label': final_label,
+            'decision_method': decision_method,
             'model_prediction': model_prediction,
             'model_probability': model_probability,
             'anomaly_score': anomaly_score,
@@ -422,8 +439,13 @@ class AIDetectionPipeline:
 
             # 3. Create Alert ONLY for confirmed threat with Threat Score >= 50 and Deduplication
             if prediction == 'ATTACK' and threat_score >= 50:
-                alert_key = (src_ip, dst_ip, final_label)
                 now = time.time()
+                # Prune old deduplication keys to prevent memory leaks during long-running flood attacks
+                if len(self.recent_alerts) > 500:
+                    cutoff_dedup = now - (self.ALERT_DEDUPLICATION_WINDOW * 2)
+                    self.recent_alerts = {k: v for k, v in self.recent_alerts.items() if v >= cutoff_dedup}
+
+                alert_key = (src_ip, dst_ip, final_label)
                 last_alert_time = self.recent_alerts.get(alert_key, 0)
                 
                 if (now - last_alert_time) >= self.ALERT_DEDUPLICATION_WINDOW:

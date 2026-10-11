@@ -47,10 +47,20 @@ def get_interfaces():
     Returns the list of available host network interfaces with full metadata.
     """
     interfaces = live_capture_manager.get_available_interfaces()
-    default_iface = 'wlp108s0' if any(i['name'] == 'wlp108s0' for i in interfaces) else (interfaces[0]['name'] if interfaces else 'lo')
+    from engine.interface_discovery import InterfaceDiscovery
+    auto_default = InterfaceDiscovery.get_default_active_interface()
+    # If live_capture_manager already has an interface configured, preserve it across refresh
+    active_iface = live_capture_manager.interface
+    if active_iface and any(i['name'] == active_iface for i in interfaces):
+        selected_iface = active_iface
+    else:
+        selected_iface = auto_default
+
     return jsonify({
         'interfaces': interfaces,
-        'default': default_iface
+        'default': selected_iface,
+        'active_interface': active_iface,
+        'is_running': live_capture_manager.is_running
     })
 
 @monitoring_bp.route('/api/monitoring/live/start', methods=['POST'])
@@ -97,7 +107,8 @@ def stop_live_monitoring():
 @login_required
 def get_live_status():
     """
-    Returns live packet capture telemetry status.
+    Returns live packet capture telemetry status including the currently active interface.
+    Used by the frontend to restore accurate state after a page refresh.
     """
     status = live_capture_manager.get_status()
     return jsonify(status)

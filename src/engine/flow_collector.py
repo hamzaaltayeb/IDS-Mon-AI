@@ -64,9 +64,11 @@ class FlowRecord:
 
         # Check TCP flags: identify non-SYN traffic and session teardowns
         if tcp_flags is not None and self.proto == 'TCP':
-            # If not a pure SYN packet (e.g. ACK, PSH, data, or FIN/RST), it's not a pure SYN probe
-            if not (tcp_flags & 0x02) or (tcp_flags & 0x10):
-                self.is_syn_only = False
+            # Check initiator direction for SYN probe classification:
+            # If responder replies with RST/ACK, the initiator's probe was still a pure SYN
+            if src_ip == self.initiator_ip and src_port == self.initiator_port:
+                if not (tcp_flags & 0x02) or (tcp_flags & 0x10):
+                    self.is_syn_only = False
             
             # Check TCP session termination (FIN: 0x01, RST: 0x04)
             if (tcp_flags & 0x01) or (tcp_flags & 0x04):
@@ -348,9 +350,16 @@ class FlowTable:
                     # Criterion B: SYN-only flood check — never-analyzed flows bypass the cooldown.
                     # The 2.0s cooldown is meant to throttle RE-analysis of multi-packet flows,
                     # not to delay the first-ever analysis of brand-new 1-packet SYN probes.
-                    if flow.is_syn_only and flow.analysis_count == 0 and (current_time - flow.start_time) >= 1.0:
+                    if flow.is_syn_only and flow.analysis_count == 0 and (current_time - flow.start_time) >= 0.5:
                         tgt_pps, _ = self.behavioral.get_target_traffic_rate(flow.responder_ip, current_time)
-                        if tgt_pps >= 300.0:
+                        if tgt_pps >= 150.0:
+                            is_active_eligible = True
+
+                    # Criterion C: Active port scan sweep check — never-analyzed probe flows bypass cooldown
+                    # when the source IP has probed >= 8 distinct ports on this target host.
+                    if not is_active_eligible and flow.is_syn_only and flow.analysis_count == 0 and (current_time - flow.start_time) >= 0.5:
+                        scan_probes = self.behavioral.get_port_scan_count(flow.initiator_ip, flow.responder_ip, current_time)
+                        if scan_probes >= 8:
                             is_active_eligible = True
 
                     # Criterion A / re-analysis: Enforce 2.0s cooldown for already-analyzed flows
@@ -362,9 +371,9 @@ class FlowTable:
                             is_active_eligible = True
 
                         # Criterion B re-check: ongoing SYN flood (already analyzed at least once)
-                        elif flow.is_syn_only and (current_time - flow.start_time) >= 1.0:
+                        elif flow.is_syn_only and (current_time - flow.start_time) >= 0.5:
                             tgt_pps, _ = self.behavioral.get_target_traffic_rate(flow.responder_ip, current_time)
-                            if tgt_pps >= 300.0:
+                            if tgt_pps >= 150.0:
                                 is_active_eligible = True
 
                 if is_expired:
